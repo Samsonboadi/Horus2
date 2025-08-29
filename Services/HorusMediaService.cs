@@ -1,5 +1,4 @@
-﻿// Services/HorusMediaService.cs
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Net.Http;
 using System.Text;
@@ -14,6 +13,7 @@ namespace Test.Services
         private readonly HttpClient _httpClient;
         private string _bridgeUrl = "http://localhost:5001";
         private bool _isConnected = false;
+        private bool _disposed = false;
 
         public HorusMediaService()
         {
@@ -22,15 +22,27 @@ namespace Test.Services
             _httpClient.DefaultRequestHeaders.Add("User-Agent", "SphericalImageViewer-HorusBridge/1.0");
         }
 
-        public bool IsConnected => _isConnected;
+        public bool IsConnected => _isConnected && !_disposed;
 
         public void UpdateBridgeUrl(string bridgeUrl)
         {
-            _bridgeUrl = bridgeUrl.TrimEnd('/');
+            if (!_disposed)
+            {
+                _bridgeUrl = bridgeUrl.TrimEnd('/');
+            }
         }
 
         public async Task<ApiResponse<bool>> ConnectAsync(HorusConnectionConfig config)
         {
+            if (_disposed)
+            {
+                return new ApiResponse<bool>
+                {
+                    Success = false,
+                    Error = "Service has been disposed"
+                };
+            }
+
             try
             {
                 var connectionRequest = new
@@ -40,7 +52,8 @@ namespace Test.Services
                         host = config.HorusHost,
                         port = config.HorusPort,
                         username = config.HorusUsername,
-                        password = config.HorusPassword
+                        password = config.HorusPassword,
+                        url = $"http://{config.HorusHost}:{config.HorusPort}/web/"
                     },
                     database = new
                     {
@@ -79,6 +92,14 @@ namespace Test.Services
                     };
                 }
             }
+            catch (ObjectDisposedException)
+            {
+                return new ApiResponse<bool>
+                {
+                    Success = false,
+                    Error = "HTTP client has been disposed"
+                };
+            }
             catch (Exception ex)
             {
                 _isConnected = false;
@@ -92,6 +113,15 @@ namespace Test.Services
 
         public async Task<ApiResponse<List<HorusRecording>>> GetRecordingsAsync()
         {
+            if (_disposed)
+            {
+                return new ApiResponse<List<HorusRecording>>
+                {
+                    Success = false,
+                    Error = "Service has been disposed"
+                };
+            }
+
             try
             {
                 var response = await _httpClient.GetAsync($"{_bridgeUrl}/recordings");
@@ -111,6 +141,14 @@ namespace Test.Services
                     };
                 }
             }
+            catch (ObjectDisposedException)
+            {
+                return new ApiResponse<List<HorusRecording>>
+                {
+                    Success = false,
+                    Error = "HTTP client has been disposed"
+                };
+            }
             catch (Exception ex)
             {
                 return new ApiResponse<List<HorusRecording>>
@@ -123,6 +161,15 @@ namespace Test.Services
 
         public async Task<ApiResponse<List<HorusImage>>> GetImagesAsync(HorusImageRequest request)
         {
+            if (_disposed)
+            {
+                return new ApiResponse<List<HorusImage>>
+                {
+                    Success = false,
+                    Error = "Service has been disposed"
+                };
+            }
+
             try
             {
                 var requestData = new
@@ -153,6 +200,14 @@ namespace Test.Services
                     };
                 }
             }
+            catch (ObjectDisposedException)
+            {
+                return new ApiResponse<List<HorusImage>>
+                {
+                    Success = false,
+                    Error = "HTTP client has been disposed"
+                };
+            }
             catch (Exception ex)
             {
                 return new ApiResponse<List<HorusImage>>
@@ -165,6 +220,15 @@ namespace Test.Services
 
         public async Task<ApiResponse<HorusImage>> GetImageByTimestampAsync(string recordingEndpoint, string timestamp, int width = 600, int height = 600)
         {
+            if (_disposed)
+            {
+                return new ApiResponse<HorusImage>
+                {
+                    Success = false,
+                    Error = "Service has been disposed"
+                };
+            }
+
             try
             {
                 var url = $"{_bridgeUrl}/image/{Uri.EscapeDataString(recordingEndpoint)}/{Uri.EscapeDataString(timestamp)}?width={width}&height={height}";
@@ -186,6 +250,14 @@ namespace Test.Services
                     };
                 }
             }
+            catch (ObjectDisposedException)
+            {
+                return new ApiResponse<HorusImage>
+                {
+                    Success = false,
+                    Error = "HTTP client has been disposed"
+                };
+            }
             catch (Exception ex)
             {
                 return new ApiResponse<HorusImage>
@@ -198,6 +270,15 @@ namespace Test.Services
 
         public async Task<ApiResponse<bool>> CheckHealthAsync()
         {
+            if (_disposed)
+            {
+                return new ApiResponse<bool>
+                {
+                    Success = false,
+                    Error = "Service has been disposed"
+                };
+            }
+
             try
             {
                 var response = await _httpClient.GetAsync($"{_bridgeUrl}/health");
@@ -224,6 +305,14 @@ namespace Test.Services
                     };
                 }
             }
+            catch (ObjectDisposedException)
+            {
+                return new ApiResponse<bool>
+                {
+                    Success = false,
+                    Error = "HTTP client has been disposed"
+                };
+            }
             catch (Exception ex)
             {
                 return new ApiResponse<bool>
@@ -236,6 +325,15 @@ namespace Test.Services
 
         public async Task<ApiResponse<bool>> DisconnectAsync()
         {
+            if (_disposed)
+            {
+                return new ApiResponse<bool>
+                {
+                    Success = false,
+                    Error = "Service has been disposed"
+                };
+            }
+
             try
             {
                 var response = await _httpClient.PostAsync($"{_bridgeUrl}/disconnect", null);
@@ -260,6 +358,14 @@ namespace Test.Services
                     };
                 }
             }
+            catch (ObjectDisposedException)
+            {
+                return new ApiResponse<bool>
+                {
+                    Success = false,
+                    Error = "HTTP client has been disposed"
+                };
+            }
             catch (Exception ex)
             {
                 return new ApiResponse<bool>
@@ -270,9 +376,29 @@ namespace Test.Services
             }
         }
 
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!_disposed)
+            {
+                if (disposing)
+                {
+                    try
+                    {
+                        _httpClient?.Dispose();
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Error disposing HttpClient in PythonApiService: {ex.Message}");
+                    }
+                }
+                _disposed = true;
+            }
+        }
+
         public void Dispose()
         {
-            _httpClient?.Dispose();
+            Dispose(true);
+            GC.SuppressFinalize(this);
         }
     }
 }

@@ -12,6 +12,7 @@ namespace Test.Services
     {
         private readonly HttpClient _httpClient;
         private string _apiBaseUrl = "http://localhost:5000/api";
+        private bool _disposed = false;
 
         public PythonApiService()
         {
@@ -22,11 +23,23 @@ namespace Test.Services
 
         public void UpdateBaseUrl(string serverUrl)
         {
-            _apiBaseUrl = $"{serverUrl.TrimEnd('/')}/api";
+            if (!_disposed)
+            {
+                _apiBaseUrl = $"{serverUrl.TrimEnd('/')}/api";
+            }
         }
 
         public async Task<ApiResponse<T>> GetAsync<T>(string endpoint)
         {
+            if (_disposed)
+            {
+                return new ApiResponse<T>
+                {
+                    Success = false,
+                    Error = "Service has been disposed"
+                };
+            }
+
             try
             {
                 var response = await _httpClient.GetAsync($"{_apiBaseUrl}/{endpoint}");
@@ -45,6 +58,14 @@ namespace Test.Services
                         Error = $"HTTP {response.StatusCode}: {content}"
                     };
                 }
+            }
+            catch (ObjectDisposedException)
+            {
+                return new ApiResponse<T>
+                {
+                    Success = false,
+                    Error = "HTTP client has been disposed"
+                };
             }
             catch (HttpRequestException httpEx)
             {
@@ -74,6 +95,15 @@ namespace Test.Services
 
         public async Task<ApiResponse<T>> PostAsync<T>(string endpoint, object data)
         {
+            if (_disposed)
+            {
+                return new ApiResponse<T>
+                {
+                    Success = false,
+                    Error = "Service has been disposed"
+                };
+            }
+
             try
             {
                 var jsonContent = JsonConvert.SerializeObject(data);
@@ -96,6 +126,14 @@ namespace Test.Services
                     };
                 }
             }
+            catch (ObjectDisposedException)
+            {
+                return new ApiResponse<T>
+                {
+                    Success = false,
+                    Error = "HTTP client has been disposed"
+                };
+            }
             catch (Exception ex)
             {
                 return new ApiResponse<T>
@@ -106,9 +144,29 @@ namespace Test.Services
             }
         }
 
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!_disposed)
+            {
+                if (disposing)
+                {
+                    try
+                    {
+                        _httpClient?.Dispose();
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Error disposing HttpClient: {ex.Message}");
+                    }
+                }
+                _disposed = true;
+            }
+        }
+
         public void Dispose()
         {
-            _httpClient?.Dispose();
+            Dispose(true);
+            GC.SuppressFinalize(this);
         }
     }
 }

@@ -1,9 +1,4 @@
-"""
-HTTP Bridge Server for Horus Media Client integration with C# ArcGIS Pro Add-in
-This server provides a REST API that your C# application can call
-"""
-
-from flask import Flask, request, jsonify
+﻿from flask import Flask, request, jsonify
 import json
 import logging
 import traceback
@@ -17,15 +12,18 @@ from typing import List, Dict, Any
 import itertools
 from PIL import Image
 import psycopg2
+import socket
+import time
 
-# Try to import your working Connection_settings module
+# Try to import Connection_settings module
 try:
     from Connection_settings import connection_settings, external_data
     CONNECTION_SETTINGS_AVAILABLE = True
 except ImportError as e:
-    print(f"WARNING: Horus modules not available: {e}")
-    print("The server will start but Horus functionality will be limited")
-    HORUS_AVAILABLE = False# Try to import Horus modules - handle gracefully if they're not available
+    print(f"WARNING: Connection_settings module not available: {e}")
+    CONNECTION_SETTINGS_AVAILABLE = False
+
+# Try to import Horus modules
 try:
     from horus_media import Client, Size
     from horus_db import Frames, Recordings, Frame, Recording
@@ -46,29 +44,155 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
+class DatabaseConnectionDiagnostics:
+    """Enhanced database connection with diagnostics"""
+    
+    @staticmethod
+    def test_network_connectivity(host, port, timeout=10):
+        """Test basic network connectivity to database server"""
+        try:
+            logger.info(f"Testing network connectivity to {host}:{port}")
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(timeout)
+            result = sock.connect_ex((host, int(port)))
+            sock.close()
+            
+            if result == 0:
+                logger.info("✓ Network connectivity: SUCCESS")
+                return True, "Network connectivity successful"
+            else:
+                error_msg = f"Network connectivity failed (error code: {result})"
+                logger.error(f"✗ {error_msg}")
+                return False, error_msg
+                
+        except Exception as e:
+            error_msg = f"Network connectivity test exception: {e}"
+            logger.error(f"✗ {error_msg}")
+            return False, error_msg
+    
+    @staticmethod
+    def test_postgresql_response(host, port, timeout=5):
+        """Test if PostgreSQL service is responding"""
+        try:
+            logger.info(f"Testing PostgreSQL service response on {host}:{port}")
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(timeout)
+            sock.connect((host, int(port)))
+            
+            # Send a basic PostgreSQL startup message
+            startup_msg = b'\x00\x00\x00\x08\x04\xd2\x16\x2f'
+            sock.send(startup_msg)
+            
+            # Try to receive response
+            response = sock.recv(1024)
+            sock.close()
+            
+            if response:
+                logger.info("✓ PostgreSQL service is responding")
+                return True, "PostgreSQL service responding"
+            else:
+                error_msg = "PostgreSQL service not responding"
+                logger.error(f"✗ {error_msg}")
+                return False, error_msg
+                
+        except Exception as e:
+            error_msg = f"PostgreSQL service test failed: {e}"
+            logger.error(f"✗ {error_msg}")
+            return False, error_msg
+    
+    @staticmethod
+    def try_connection_methods(host, port, database, user, password):
+        """Try multiple connection methods with detailed error reporting"""
+        connection_methods = [
+            {
+                "name": "Standard Format",
+                "conn_str": f"host={host} port={port} dbname={database} user={user} password={password} connect_timeout=15"
+            },
+            {
+                "name": "Quoted Format",
+                "conn_str": f"host='{host}' port='{port}' dbname='{database}' user='{user}' password='{password}' connect_timeout=15"
+            },
+            {
+                "name": "URI Format",
+                "conn_str": f"postgresql://{user}:{password}@{host}:{port}/{database}?connect_timeout=15"
+            },
+            {
+                "name": "SSL Disabled",
+                "conn_str": f"host={host} port={port} dbname={database} user={user} password={password} sslmode=disable connect_timeout=15"
+            },
+            {
+                "name": "SSL Prefer",
+                "conn_str": f"host={host} port={port} dbname={database} user={user} password={password} sslmode=prefer connect_timeout=15"
+            }
+        ]
+        
+        for method in connection_methods:
+            logger.info(f"Trying {method['name']} connection method...")
+            try:
+                conn = psycopg2.connect(method['conn_str'])
+                cursor = conn.cursor()
+                cursor.execute("SELECT version(), current_database(), current_user")
+                result = cursor.fetchone()
+                cursor.close()
+                conn.close()
+                
+                logger.info(f"✓ SUCCESS with {method['name']} method")
+                logger.info(f"  Database: {result[1]}, User: {result[2]}")
+                logger.info(f"  Version: {result[0][:60]}...")
+                
+                return conn, method['conn_str'], method['name']
+                
+            except psycopg2.OperationalError as op_ex:
+                logger.warning(f"✗ {method['name']} failed - Operational: {op_ex}")
+                
+            except psycopg2.Error as pg_ex:
+                logger.warning(f"✗ {method['name']} failed - PostgreSQL: {pg_ex}")
+                
+            except Exception as ex:
+                logger.warning(f"✗ {method['name']} failed - General: {ex}")
+        
+        return None, None, None
+
 class HorusMediaBridge:
     def __init__(self):
         self.client = None
         self.db_connection = None
         self.is_connected = False
-        
-        # Default configuration - will be updated from C# application
+        self.connection_string = None
+        self.connection_method = None
+    
+        # Initialize default configuration
         self.db_config = {
-            "host": "",
+            "host": "10.0.10.100",
             "port": "5432",
             "database": "HorusWebMoviePlayer",
-            "user": "",
-            "password": ""
+            "user": "pocmsro",
+            "password": ""  # Default to empty; will be overridden by Connection_settings if available
         }
-        
+    
         self.horus_config = {
             "url": "http://10.0.10.100:5050/web/",
             "host": "10.0.10.100",
             "port": 5050
         }
+    
+        # Load credentials from Connection_settings if available
+        if CONNECTION_SETTINGS_AVAILABLE:
+            try:
+                settings = connection_settings(**external_data)
+                self.db_config.update({
+                    "host": settings.host,
+                    "port": settings.port,
+                    "database": settings.dbname,
+                    "user": settings.dbuser,
+                    "password": settings.password
+                })
+                logger.info(f"Loaded credentials from Connection_settings: host={settings.host}, user={settings.dbuser}, dbname={settings.dbname}")
+            except Exception as e:
+                logger.warning(f"Failed to load Connection_settings: {e}. Using default config.")
 
     def update_config(self, config_data):
-        """Update configuration from external source (like C# application)"""
+        """Update configuration from external source"""
         try:
             if 'database' in config_data:
                 self.db_config.update(config_data['database'])
@@ -76,14 +200,13 @@ class HorusMediaBridge:
             
             if 'horus' in config_data:
                 self.horus_config.update(config_data['horus'])
-                # Extract host and port from URL if provided
                 if 'url' in config_data['horus']:
                     url = config_data['horus']['url']
                     if '://' in url:
                         url_parts = url.replace('http://', '').replace('https://', '').split(':')
                         if len(url_parts) >= 2:
                             self.horus_config['host'] = url_parts[0]
-                            port_part = url_parts[1].split('/')[0]  # Remove path after port
+                            port_part = url_parts[1].split('/')[0]
                             try:
                                 self.horus_config['port'] = int(port_part)
                             except ValueError:
@@ -96,37 +219,61 @@ class HorusMediaBridge:
             logger.error(f"Failed to update config: {e}")
             return False
 
-    def load_config_from_file(self, config_path):
-        """Load configuration from JSON file"""
+    def connect_database(self, db_config=None) -> bool:
+        """Connect to database using the same connection string logic as horus_test_get_img.py"""
         try:
-            if os.path.exists(config_path):
-                with open(config_path, 'r') as f:
-                    config_data = json.load(f)
-                    logger.info(f"Loaded config from file: {config_path}")
-                    return self.update_config(config_data)
-            else:
-                logger.warning(f"Config file not found: {config_path}")
-                return False
-        except Exception as e:
-            logger.error(f"Failed to load config from file: {e}")
+            if db_config:
+                self.db_config.update(db_config)
+        
+            required_fields = ['host', 'database', 'user']
+            missing_fields = [field for field in required_fields if not self.db_config.get(field)]
+            if missing_fields:
+                raise ValueError(f"Missing required database fields: {', '.join(missing_fields)}")
+        
+            logger.info(f"Attempting database connection to: {self.db_config['host']}:{self.db_config['port']}/{self.db_config['database']}")
+        
+            # Build connection string like horus_test_get_img.py
+            db_params = [
+                ("host", self.db_config['host']),
+                ("port", self.db_config['port']),
+                ("dbname", self.db_config['database']),
+                ("user", self.db_config['user']),
+                ("password", self.db_config['password']),
+            ]
+            connection_string = " ".join(map("=".join, filter(lambda x: x[1] is not None, db_params)))
+        
+            logger.info(f"Connection string: {connection_string.replace(self.db_config['password'], '***')}")
+        
+            self.db_connection = psycopg2.connect(connection_string)
+            cursor = self.db_connection.cursor()
+            cursor.execute("SELECT version(), current_database(), current_user")
+            result = cursor.fetchone()
+            cursor.close()
+        
+            logger.info(f"Database connection: SUCCESS - Connected to {result[1]} as {result[2]}")
+            logger.info(f"PostgreSQL version: {result[0][:60]}...")
+        
+            self.connection_string = connection_string
+            self.connection_method = "Standard Format (Dynamic)"
+            return True
+        
+        except psycopg2.OperationalError as op_ex:
+            logger.error(f"Database connection failed - Operational Error: {op_ex}")
+            self.db_connection = None
             return False
-        
-    def get_database_connection_string(self):
-        """Generate database connection string"""
-        # Validate required parameters
-        required_fields = ['host', 'database', 'user']
-        for field in required_fields:
-            if not self.db_config.get(field):
-                raise ValueError(f"Database {field} is required but not provided")
-        
-        db_params = [
-            ("host", self.db_config["host"]),
-            ("port", self.db_config["port"]),
-            ("dbname", self.db_config["database"]),
-            ("user", self.db_config["user"]),
-            ("password", self.db_config["password"]),
-        ]
-        return " ".join(map("=".join, filter(lambda x: x[1] is not None and x[1] != "", db_params)))
+        except psycopg2.Error as pg_ex:
+            logger.error(f"Database connection failed - PostgreSQL Error: {pg_ex}")
+            self.db_connection = None
+            return False
+        except ValueError as ve:
+            logger.error(f"Database configuration error: {ve}")
+            self.db_connection = None
+            return False
+        except Exception as e:
+            logger.error(f"Database connection failed with unexpected error: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            self.db_connection = None
+            return False
     
     def connect_horus(self, horus_url=None) -> bool:
         """Connect to Horus media server"""
@@ -141,8 +288,6 @@ class HorusMediaBridge:
             self.client = Client(url, timeout=20)
             self.client.attempts = 5
             
-            # Test the connection by making a simple request
-            # This will throw an exception if the connection fails
             test_response = self.client._session.get(url, timeout=10)
             if test_response.status_code == 200:
                 self.is_connected = True
@@ -158,139 +303,8 @@ class HorusMediaBridge:
             self.is_connected = False
             return False
     
-    def connect_database(self, db_config=None) -> bool:
-        """Connect to PostgreSQL database using the same method as your working script"""
-        try:
-            if db_config:
-                self.db_config.update(db_config)
-            
-            # Validate configuration
-            required_fields = ['host', 'database', 'user']
-            missing_fields = [field for field in required_fields if not self.db_config.get(field)]
-            if missing_fields:
-                raise ValueError(f"Missing required database fields: {', '.join(missing_fields)}")
-            
-            logger.info(f"Attempting database connection to: {self.db_config['host']}:{self.db_config['port']}/{self.db_config['database']}")
-            
-            # Method 1: Try using your Connection_settings approach if available
-            if CONNECTION_SETTINGS_AVAILABLE:
-                try:
-                    logger.info("Trying Connection_settings module approach (like your working script)...")
-                    
-                    # Create external_data structure matching your script
-                    external_data_bridge = {
-                        'host': self.db_config['host'],
-                        'port': self.db_config['port'],
-                        'dbname': self.db_config['database'],
-                        'dbuser': self.db_config['user'],
-                        'password': self.db_config['password']
-                    }
-                    
-                    # Use your connection_settings function
-                    settings = connection_settings(**external_data_bridge)
-                    
-                    # Create connection string the same way as your working script
-                    db_params = [
-                        ("host", settings.host),
-                        ("port", settings.port),
-                        ("dbname", settings.dbname),
-                        ("user", settings.dbuser),
-                        ("password", settings.password),
-                    ]
-                    connection_string = " ".join(
-                        map("=".join, filter(lambda x: x[1] is not None, db_params))
-                    )
-                    
-                    logger.info("Connecting using Connection_settings pattern...")
-                    self.db_connection = psycopg2.connect(connection_string)
-                    
-                    # Test connection like your script
-                    cursor = self.db_connection.cursor()
-                    cursor.execute("SELECT current_database(), current_user")
-                    db_info = cursor.fetchone()
-                    cursor.close()
-                    
-                    logger.info(f"Database connection: SUCCESS (Connection_settings method) - Connected to {db_info[0]} as {db_info[1]}")
-                    return True
-                    
-                except Exception as settings_ex:
-                    logger.warning(f"Connection_settings method failed: {settings_ex}")
-                    if self.db_connection:
-                        try:
-                            self.db_connection.close()
-                        except:
-                            pass
-                        self.db_connection = None
-            
-            # Method 2: Try exact connection string format from your working script
-            try:
-                logger.info("Trying exact connection string format from working script...")
-                
-                # Build connection string exactly like your manual script shows
-                connection_string = f"host='{self.db_config['host']}' port='{self.db_config['port']}' dbname='{self.db_config['database']}' user='{self.db_config['user']}' password='{self.db_config['password']}'"
-                logger.info(f"Using connection string format: {connection_string.replace(self.db_config['password'], '***')}")
-                
-                self.db_connection = psycopg2.connect(connection_string)
-                
-                # Test connection
-                cursor = self.db_connection.cursor()
-                cursor.execute("SELECT version()")
-                version = cursor.fetchone()[0]
-                cursor.close()
-                
-                logger.info(f"Database connection: SUCCESS (exact format method) - {version}")
-                return True
-                
-            except Exception as exact_ex:
-                logger.warning(f"Exact format method failed: {exact_ex}")
-                if self.db_connection:
-                    try:
-                        self.db_connection.close()
-                    except:
-                        pass
-                    self.db_connection = None
-            
-            # Method 3: Basic connection string (original approach)
-            try:
-                connection_string = self.get_database_connection_string()
-                logger.info(f"Trying basic connection string approach...")
-                self.db_connection = psycopg2.connect(connection_string)
-                
-                # Test connection
-                cursor = self.db_connection.cursor()
-                cursor.execute("SELECT 1")
-                result = cursor.fetchone()
-                cursor.close()
-                
-                if result and result[0] == 1:
-                    logger.info("Database connection: SUCCESS (basic method)")
-                    return True
-                    
-            except Exception as basic_ex:
-                logger.warning(f"Basic connection method failed: {basic_ex}")
-                if self.db_connection:
-                    try:
-                        self.db_connection.close()
-                    except:
-                        pass
-                    self.db_connection = None
-            
-            # All methods failed
-            logger.error("All database connection methods failed")
-            return False
-            
-        except ValueError as ve:
-            logger.error(f"Database configuration error: {ve}")
-            self.db_connection = None
-            return False
-        except Exception as e:
-            logger.error(f"Failed to connect to database: {e}")
-            logger.error(f"Traceback: {traceback.format_exc()}")
-            self.db_connection = None
-            return False
-    
     def get_recordings(self) -> List[Dict]:
-        """Get list of available recordings using the same pattern as your working manual script"""
+        """Get list of available recordings"""
         try:
             if not self.db_connection:
                 logger.warning("No database connection for retrieving recordings")
@@ -302,43 +316,7 @@ class HorusMediaBridge:
 
             logger.info("Starting to retrieve recordings from database...")
             
-            # First, let's check what tables exist and basic counts
-            cursor = self.db_connection.cursor()
-            try:
-                cursor.execute("""
-                    SELECT table_name 
-                    FROM information_schema.tables 
-                    WHERE table_schema = 'public' AND table_name = 'recordings'
-                """)
-                table_exists = cursor.fetchone()
-                
-                if not table_exists:
-                    logger.error("recordings table does not exist in database")
-                    return []
-                
-                # Check total count
-                cursor.execute("SELECT COUNT(*) FROM recordings")
-                recording_count = cursor.fetchone()[0]
-                logger.info(f"Total recordings in database: {recording_count}")
-                
-                if recording_count == 0:
-                    logger.warning("No recordings found in database")
-                    return []
-                
-                # Get sample data to see structure
-                cursor.execute("SELECT id, directory, created FROM recordings LIMIT 10")
-                sample_recordings = cursor.fetchall()
-                logger.info(f"Sample recordings from direct query: {sample_recordings}")
-                
-            finally:
-                cursor.close()
-
-            # Now use the Horus ORM approach that matches your working script
             recordings_manager = Recordings(self.db_connection)
-            
-            # Use the same query pattern as your working script
-            # Your script uses: Recording.query(recordings, directory_like=endpoint)
-            # Let's get ALL recordings first
             query_results = list(Recording.query(recordings_manager))
             
             logger.info(f"Horus ORM query returned {len(query_results)} recordings")
@@ -348,7 +326,6 @@ class HorusMediaBridge:
                 try:
                     logger.info(f"Processing recording {i+1}: ID={recording.id}, Directory={getattr(recording, 'directory', 'N/A')}")
                     
-                    # Get the setup for this recording (like in your working script)
                     recordings_manager.get_setup(recording)
                     
                     directory = getattr(recording, 'directory', f"Recording_{recording.id}")
@@ -434,69 +411,13 @@ class HorusMediaBridge:
             logger.error(f"Failed to get images: {e}")
             logger.error(f"Traceback: {traceback.format_exc()}")
             raise
-    
-    def get_image_by_timestamp(self, recording_endpoint: str, timestamp: str, width: int = 600, height: int = 600) -> Dict:
-        """Get specific image by timestamp"""
-        try:
-            if not HORUS_AVAILABLE:
-                raise Exception("Horus modules are not available")
-                
-            if not self.client or not self.is_connected or not self.db_connection:
-                raise Exception("Not connected to Horus server or database")
-            
-            recordings_manager = Recordings(self.db_connection)
-            recording = next(Recording.query(recordings_manager, directory_like=recording_endpoint), None)
-            if not recording:
-                raise Exception(f"No recording found for endpoint: {recording_endpoint}")
-            
-            recordings_manager.get_setup(recording)
-            
-            frames_manager = Frames(self.db_connection)
-            frame_query = Frame.query(frames_manager, recordingid=recording.id, order_by="timestamp")
-            selected_frame = None
-            target_time = datetime.fromisoformat(timestamp)
-            min_diff = None
-            for frame in frame_query:
-                if frame.timestamp:
-                    diff = abs(frame.timestamp - target_time)
-                    if min_diff is None or diff < min_diff:
-                        min_diff = diff
-                        selected_frame = frame
-            
-            if not selected_frame:
-                raise Exception(f"No frame found near timestamp: {timestamp}")
-            
-            sp_camera = SphericalCamera()
-            sp_camera.set_network_client(self.client)
-            sp_camera.set_horizontal_fov(90)
-            sp_camera.set_yaw(0)
-            sp_camera.set_pitch(-30)
-            
-            communication = sp_camera.request(selected_frame, Size(width, height))
-            image = communication.image
-            
-            buffer = io.BytesIO()
-            image.save(buffer, format="JPEG")
-            image_bytes = buffer.getvalue()
-            image_b64 = base64.b64encode(image_bytes).decode('utf-8')
-            
-            return {
-                "Data": image_b64,
-                "Format": "image/jpeg",
-                "Timestamp": selected_frame.timestamp.isoformat() if selected_frame.timestamp else None
-            }
-                
-        except Exception as e:
-            logger.error(f"Failed to get image by timestamp: {e}")
-            logger.error(f"Traceback: {traceback.format_exc()}")
-            raise
 
 # Global bridge instance
 bridge = HorusMediaBridge()
 
 @app.route('/health', methods=['GET'])
 def health_check():
-    """Enhanced health check endpoint with detailed diagnostics"""
+    """Health check endpoint with detailed diagnostics"""
     try:
         return jsonify({
             "status": "running",
@@ -504,7 +425,9 @@ def health_check():
             "horus_connected": bridge.is_connected,
             "database_connected": bridge.db_connection is not None,
             "horus_modules_available": HORUS_AVAILABLE,
+            "connection_settings_available": CONNECTION_SETTINGS_AVAILABLE,
             "python_version": sys.version,
+            "successful_connection_method": bridge.connection_method,
             "config": {
                 "db_host": bridge.db_config.get("host", "not set"),
                 "db_port": bridge.db_config.get("port", "not set"),
@@ -526,21 +449,19 @@ def health_check():
 
 @app.route('/connect', methods=['POST'])
 def connect():
-    """Connect to Horus server and database with provided configuration"""
+    """Connect endpoint with full diagnostics"""
     try:
         data = request.json
-        logger.info("=" * 50)
-        logger.info("STARTING CONNECTION PROCESS")
-        logger.info("=" * 50)
+        logger.info("=" * 60)
+        logger.info("ENHANCED CONNECTION PROCESS STARTING")
+        logger.info("=" * 60)
         
-        # Log the configuration (without passwords)
         if data:
             safe_data = data.copy()
             if 'database' in safe_data and 'password' in safe_data['database']:
                 safe_data['database']['password'] = '***'
             logger.info(f"Connection config received: {json.dumps(safe_data, indent=2)}")
         
-        # Update configuration if provided
         if data:
             success = bridge.update_config(data)
             if not success:
@@ -551,7 +472,6 @@ def connect():
                     "database_connected": False
                 }), 400
         
-        # Validate required database configuration
         db_required = ['host', 'database', 'user']
         missing_db_fields = [field for field in db_required if not bridge.db_config.get(field)]
         
@@ -565,12 +485,10 @@ def connect():
                 "horus_connected": False
             }), 400
         
-        # Connect to database first
-        logger.info("STEP 1: Attempting database connection...")
+        logger.info("STEP 1: Enhanced database connection with diagnostics...")
         db_success = bridge.connect_database()
         logger.info(f"Database connection result: {'SUCCESS' if db_success else 'FAILED'}")
         
-        # Connect to Horus
         horus_success = False
         if HORUS_AVAILABLE:
             if db_success:
@@ -583,21 +501,36 @@ def connect():
         else:
             logger.warning("STEP 2: Skipping Horus connection - modules not available")
         
-        result_message = f"Connection completed. Database: {'OK' if db_success else 'FAIL'}, Horus: {'OK' if horus_success else 'FAIL'}"
-        logger.info("=" * 50)
-        logger.info(f"CONNECTION RESULT: {result_message}")
-        logger.info("=" * 50)
+        result_message = f"Enhanced connection completed. Database: {'OK' if db_success else 'FAIL'}, Horus: {'OK' if horus_success else 'FAIL'}"
+        
+        troubleshooting_info = {}
+        if not db_success:
+            troubleshooting_info = {
+                "network_accessible": "Check if host 10.0.10.100 is reachable",
+                "port_open": "Verify PostgreSQL is listening on port 5432",
+                "credentials": "Verify username/password are correct", 
+                "pg_hba_conf": "Check PostgreSQL client authentication settings",
+                "firewall": "Ensure no firewall blocking the connection"
+            }
+        
+        logger.info("=" * 60)
+        logger.info(f"ENHANCED CONNECTION RESULT: {result_message}")
+        if bridge.connection_method:
+            logger.info(f"Successful connection method: {bridge.connection_method}")
+        logger.info("=" * 60)
         
         return jsonify({
             "success": True,
             "horus_connected": horus_success,
             "database_connected": db_success,
             "message": result_message,
-            "horus_modules_available": HORUS_AVAILABLE
+            "horus_modules_available": HORUS_AVAILABLE,
+            "connection_method": bridge.connection_method,
+            "troubleshooting": troubleshooting_info if not db_success else None
         })
         
     except Exception as e:
-        logger.error(f"Connection failed: {e}")
+        logger.error(f"Enhanced connection failed: {e}")
         logger.error(f"Traceback: {traceback.format_exc()}")
         return jsonify({
             "success": False,
@@ -609,11 +542,10 @@ def connect():
 
 @app.route('/test-db', methods=['POST'])
 def test_database_connection():
-    """Test database connection without affecting main connection"""
+    """Test database connection with full diagnostics"""
     try:
         data = request.json or {}
         
-        # Use provided config or current config
         test_config = {
             "host": data.get('host') or bridge.db_config.get('host'),
             "port": data.get('port') or bridge.db_config.get('port'),
@@ -622,7 +554,6 @@ def test_database_connection():
             "password": data.get('password') or bridge.db_config.get('password')
         }
         
-        # Validate required fields
         required_fields = ['host', 'database', 'user']
         missing_fields = [field for field in required_fields if not test_config.get(field)]
         
@@ -632,46 +563,117 @@ def test_database_connection():
                 "error": f"Missing required fields: {', '.join(missing_fields)}"
             }), 400
         
-        # Build connection string
-        db_params = [
-            ("host", test_config["host"]),
-            ("port", test_config["port"]),
-            ("dbname", test_config["database"]),
-            ("user", test_config["user"]),
-            ("password", test_config["password"]),
-        ]
-        connection_string = " ".join(map("=".join, filter(lambda x: x[1] is not None and x[1] != "", db_params)))
+        logger.info("ENHANCED DATABASE TEST STARTING")
+        logger.info(f"Testing: {test_config['host']}:{test_config['port']}/{test_config['database']}")
         
-        logger.info(f"Testing database connection to: {test_config['host']}:{test_config['port']}/{test_config['database']}")
+        network_ok, network_msg = DatabaseConnectionDiagnostics.test_network_connectivity(
+            test_config['host'], test_config['port']
+        )
         
-        # Test connection
-        test_connection = psycopg2.connect(connection_string)
-        cursor = test_connection.cursor()
-        cursor.execute("SELECT version()")
-        db_version = cursor.fetchone()[0]
-        cursor.close()
-        test_connection.close()
+        if not network_ok:
+            return jsonify({
+                "success": False,
+                "error": f"Network connectivity failed: {network_msg}",
+                "step_failed": "network_connectivity",
+                "troubleshooting": [
+                    f"Ping {test_config['host']} to test basic connectivity",
+                    f"Check if port {test_config['port']} is open",
+                    "Verify no firewall is blocking the connection",
+                    "Ensure PostgreSQL server is running"
+                ]
+            }), 400
         
-        logger.info("Database test connection successful")
+        service_ok, service_msg = DatabaseConnectionDiagnostics.test_postgresql_response(
+            test_config['host'], test_config['port']
+        )
         
-        return jsonify({
-            "success": True,
-            "message": "Database connection successful",
-            "version": db_version
-        })
+        if not service_ok:
+            return jsonify({
+                "success": False,
+                "error": f"PostgreSQL service not responding: {service_msg}",
+                "step_failed": "postgresql_service",
+                "troubleshooting": [
+                    "Check postgresql.conf listen_addresses setting",
+                    "Verify PostgreSQL is listening on the correct port",
+                    "Check PostgreSQL service status",
+                    "Review PostgreSQL error logs"
+                ]
+            }), 400
         
-    except psycopg2.Error as pg_ex:
-        error_msg = f"PostgreSQL error: {pg_ex}"
-        logger.error(error_msg)
-        return jsonify({
-            "success": False,
-            "error": error_msg,
-            "error_code": getattr(pg_ex, 'pgcode', 'Unknown'),
-            "hint": "Check database credentials, network connectivity, and PostgreSQL server status"
-        }), 400
+        conn, conn_str, method_name = DatabaseConnectionDiagnostics.try_connection_methods(
+            test_config['host'], 
+            test_config['port'],
+            test_config['database'],
+            test_config['user'],
+            test_config['password']
+        )
+        
+        if conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT version(), current_database(), current_user")
+            db_info = cursor.fetchone()
+            cursor.close()
+            conn.close()
+            
+            logger.info("Enhanced database test: SUCCESS")
+            
+            return jsonify({
+                "success": True,
+                "message": "Database connection successful",
+                "method": method_name,
+                "database": db_info[1],
+                "user": db_info[2],
+                "version": db_info[0][:100] + "..." if len(db_info[0]) > 100 else db_info[0]
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "error": "Authentication failed with all connection methods",
+                "step_failed": "authentication",
+                "troubleshooting": [
+                    "Verify username and password are correct",
+                    "Check pg_hba.conf client authentication settings",
+                    "Ensure user has CONNECT privilege on the database",
+                    "Try connecting with: psql -h {host} -p {port} -U {user} -d {database}".format(**test_config)
+                ]
+            }), 400
         
     except Exception as e:
-        logger.error(f"Database test failed: {e}")
+        logger.error(f"Enhanced database test failed: {e}")
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "step_failed": "unexpected_error"
+        }), 500
+
+@app.route('/network-test', methods=['POST'])
+def network_test():
+    """Network connectivity test endpoint"""
+    try:
+        data = request.json or {}
+        host = data.get('host', bridge.db_config.get('host', '10.0.10.100'))
+        port = data.get('port', bridge.db_config.get('port', '5432'))
+        
+        logger.info(f"Network test requested for {host}:{port}")
+        
+        network_ok, network_msg = DatabaseConnectionDiagnostics.test_network_connectivity(host, port)
+        service_ok, service_msg = DatabaseConnectionDiagnostics.test_postgresql_response(host, port)
+        
+        return jsonify({
+            "success": network_ok and service_ok,
+            "network_connectivity": {
+                "success": network_ok,
+                "message": network_msg
+            },
+            "postgresql_service": {
+                "success": service_ok,
+                "message": service_msg
+            },
+            "overall_status": "Ready for database connection" if (network_ok and service_ok) else "Network/Service issues detected"
+        })
+        
+    except Exception as e:
+        logger.error(f"Network test failed: {e}")
         return jsonify({
             "success": False,
             "error": str(e)
@@ -737,34 +739,6 @@ def get_images():
             "Error": str(e)
         }), 500
 
-@app.route('/image/<path:recording_endpoint>/<timestamp>', methods=['GET'])
-def get_image_by_timestamp(recording_endpoint: str, timestamp: str):
-    """Get specific image by timestamp"""
-    try:
-        if not HORUS_AVAILABLE:
-            return jsonify({
-                "Success": False,
-                "Error": "Horus modules are not available"
-            }), 503
-            
-        width = request.args.get('width', 600, type=int)
-        height = request.args.get('height', 600, type=int)
-        
-        image_data = bridge.get_image_by_timestamp(recording_endpoint, timestamp, width, height)
-        
-        return jsonify({
-            "Success": True,
-            "Data": image_data
-        })
-        
-    except Exception as e:
-        logger.error(f"Failed to get image by timestamp: {e}")
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        return jsonify({
-            "Success": False,
-            "Error": str(e)
-        }), 500
-
 @app.route('/disconnect', methods=['POST'])
 def disconnect():
     """Disconnect from services"""
@@ -780,6 +754,8 @@ def disconnect():
         if bridge.db_connection:
             bridge.db_connection.close()
             bridge.db_connection = None
+            bridge.connection_string = None
+            bridge.connection_method = None
             disconnected_services.append("Database")
             logger.info("Disconnected from Database")
         
@@ -793,7 +769,6 @@ def disconnect():
         
     except Exception as e:
         logger.error(f"Disconnect failed: {e}")
-        logger.error(f"Traceback: {traceback.format_exc()}")
         return jsonify({
             "success": False,
             "error": str(e)
@@ -801,43 +776,61 @@ def disconnect():
 
 @app.route('/debug-db', methods=['GET'])
 def debug_database():
-    """Debug endpoint to check database content"""
+    """Debug endpoint with comprehensive database diagnostics"""
     try:
         if not bridge.db_connection:
             return jsonify({
                 "success": False,
-                "error": "Not connected to database"
+                "error": "Not connected to database",
+                "suggestion": "Use /connect or /test-db to establish connection first"
             }), 400
         
         cursor = bridge.db_connection.cursor()
+        debug_info = {}
         
-        # Check tables
+        cursor.execute("SELECT version(), current_database(), current_user")
+        db_info = cursor.fetchone()
+        debug_info['database_info'] = {
+            "version": db_info[0],
+            "database": db_info[1], 
+            "user": db_info[2]
+        }
+        
         cursor.execute("""
-            SELECT table_name 
+            SELECT table_name, table_type
             FROM information_schema.tables 
             WHERE table_schema = 'public'
             ORDER BY table_name
         """)
-        tables = [table[0] for table in cursor.fetchall()]
+        tables = cursor.fetchall()
+        debug_info['tables'] = [{"name": t[0], "type": t[1]} for t in tables]
         
-        # Check recordings table specifically
-        recordings_info = {}
-        if 'recordings' in tables:
-            cursor.execute("SELECT COUNT(*) FROM recordings")
-            recordings_info['count'] = cursor.fetchone()[0]
-            
-            if recordings_info['count'] > 0:
-                cursor.execute("SELECT id, directory, created FROM recordings LIMIT 10")
-                recordings_info['samples'] = cursor.fetchall()
+        horus_tables_info = {}
+        for table_name in ['recordings', 'frames']:
+            try:
+                cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+                count = cursor.fetchone()[0]
+                horus_tables_info[table_name] = {"exists": True, "count": count}
+                
+                if count > 0:
+                    cursor.execute(f"SELECT * FROM {table_name} LIMIT 3")
+                    sample_data = cursor.fetchall()
+                    cursor.execute(f"SELECT column_name FROM information_schema.columns WHERE table_name = '{table_name}'")
+                    columns = [col[0] for col in cursor.fetchall()]
+                    horus_tables_info[table_name]["columns"] = columns
+                    horus_tables_info[table_name]["sample_rows"] = len(sample_data)
+                    
+            except psycopg2.Error as e:
+                horus_tables_info[table_name] = {"exists": False, "error": str(e)}
+        
+        debug_info['horus_tables'] = horus_tables_info
         
         cursor.close()
         
         return jsonify({
             "success": True,
-            "database_info": {
-                "tables": tables,
-                "recordings": recordings_info
-            }
+            "connection_method": bridge.connection_method,
+            "database_debug": debug_info
         })
         
     except Exception as e:
@@ -846,44 +839,24 @@ def debug_database():
             "success": False,
             "error": str(e)
         }), 500
-def update_config():
-    """Update bridge configuration"""
-    try:
-        data = request.json
-        logger.info("Updating configuration...")
-        success = bridge.update_config(data)
-        
-        return jsonify({
-            "success": success,
-            "message": "Configuration updated successfully" if success else "Failed to update configuration"
-        })
-        
-    except Exception as e:
-        logger.error(f"Config update failed: {e}")
-        return jsonify({
-            "success": False,
-            "error": str(e)
-        }), 500
 
-# Error handler for 404s
 @app.errorhandler(404)
 def not_found(error):
     return jsonify({
         "success": False,
         "error": "Endpoint not found",
         "available_endpoints": [
-            "GET /health",
-            "POST /connect", 
-            "POST /test-db",
-            "GET /recordings",
-            "POST /images",
-            "GET /image/<endpoint>/<timestamp>",
-            "POST /disconnect",
-            "POST /config"
+            "GET /health - Health check & diagnostics",
+            "POST /connect - Connect to services with full diagnostics", 
+            "POST /test-db - Test database connection",
+            "POST /network-test - Test network connectivity",
+            "GET /debug-db - Debug database content",
+            "GET /recordings - Get recordings list",
+            "POST /images - Get images from recording",
+            "POST /disconnect - Disconnect from services"
         ]
     }), 404
 
-# Error handler for 500s
 @app.errorhandler(500)
 def internal_error(error):
     return jsonify({
@@ -894,87 +867,116 @@ def internal_error(error):
 
 def parse_arguments():
     """Parse command line arguments"""
-    parser = argparse.ArgumentParser(description='Horus Media Bridge Server')
+    parser = argparse.ArgumentParser(description='Enhanced Horus Media Bridge Server')
     parser.add_argument('--config', help='Path to configuration JSON file')
     parser.add_argument('--port', type=int, default=5001, help='Server port (default: 5001)')
     parser.add_argument('--host', default='localhost', help='Server host (default: localhost)')
+    parser.add_argument('--debug-network', action='store_true', help='Run network diagnostics on startup')
     return parser.parse_args()
+
+def startup_network_diagnostics():
+    """Run network diagnostics on startup"""
+    print("")
+    print("=" * 40)
+    print("STARTUP NETWORK DIAGNOSTICS")
+    print("=" * 40)
+    
+    db_host = bridge.db_config["host"]
+    db_port = bridge.db_config["port"]
+    
+    network_ok, network_msg = DatabaseConnectionDiagnostics.test_network_connectivity(db_host, db_port)
+    if network_ok:
+        service_ok, service_msg = DatabaseConnectionDiagnostics.test_postgresql_response(db_host, db_port)
+        if service_ok:
+            print("✓ Network and PostgreSQL service tests passed")
+            print("  Ready for database connections")
+        else:
+            print("⚠ Network OK but PostgreSQL service issues detected")
+            print(f"  {service_msg}")
+    else:
+        print("✗ Network connectivity issues detected")
+        print(f"  {network_msg}")
+    
+    print("=" * 40)
 
 def check_dependencies():
     """Check if all required Python packages are available"""
-    required_packages = ['flask', 'psycopg2', 'PIL', 'json']
+    required_packages = {
+        'flask': 'Flask',
+        'psycopg2': 'psycopg2-binary', 
+        'PIL': 'Pillow',
+        'socket': 'Built-in'
+    }
+    
     missing_packages = []
     
-    for package in required_packages:
+    for package, install_name in required_packages.items():
         try:
             __import__(package)
+            print(f"✓ {package}: Available")
         except ImportError:
-            missing_packages.append(package)
+            missing_packages.append(install_name)
+            print(f"✗ {package}: Missing")
     
     if missing_packages:
-        print(f"ERROR: Missing required packages: {', '.join(missing_packages)}")
+        print(f"\nERROR: Missing required packages: {', '.join(missing_packages)}")
         print("Install them using:")
-        print("conda install flask psycopg2-binary pillow")
+        print(f"conda install {' '.join(missing_packages)}")
         return False
     
     return True
 
 if __name__ == '__main__':
     print("=" * 60)
-    print("HORUS MEDIA BRIDGE SERVER")
+    print("ENHANCED HORUS MEDIA BRIDGE SERVER")
     print("=" * 60)
     
-    # Check dependencies first
     if not check_dependencies():
         print("Cannot start server due to missing dependencies")
         sys.exit(1)
     
     args = parse_arguments()
-    print(f"Starting HTTP bridge server on http://{args.host}:{args.port}")
+    print(f"Starting enhanced HTTP bridge server on http://{args.host}:{args.port}")
     
-    # Check for Horus module availability
     if not HORUS_AVAILABLE:
         print("")
         print("WARNING: Horus modules are not available!")
-        print("   Make sure the following Python packages are installed in your")
-        print("   ArcGIS Pro Python environment:")
+        print("   Make sure the following Python packages are installed:")
         print("   - horus_media")
         print("   - horus_db") 
         print("   - horus_camera")
         print("")
-        print("   The server will start but Horus functionality will be limited")
-        print("")
     
-    # Load configuration from file if provided
+    if args.debug_network or not HORUS_AVAILABLE:
+        startup_network_diagnostics()
+    
     if args.config:
         print(f"Loading configuration from: {args.config}")
-        if bridge.load_config_from_file(args.config):
+        if bridge.update_config(json.load(open(args.config))):
             print("OK Configuration loaded successfully")
         else:
             print("ERROR Failed to load configuration, using defaults")
     
     print("")
-    print("Available endpoints:")
+    print("Enhanced endpoints:")
     print("  GET  /health                 - Health check & diagnostics")
-    print("  POST /connect                - Connect to services")
+    print("  POST /connect                - Connect with full diagnostics")
     print("  POST /test-db                - Test database connection")
+    print("  POST /network-test           - Test network connectivity")
     print("  GET  /debug-db               - Debug database content")
-    print("  POST /config                 - Update configuration")
     print("  GET  /recordings             - Get recordings list")
     print("  POST /images                 - Get images from recording")
-    print("  GET  /image/<endpoint>/<time> - Get image by timestamp")
     print("  POST /disconnect             - Disconnect from services")
     print("=" * 60)
     print("")
     
     try:
-        # Start the Flask server
         app.run(
             host=args.host,
             port=args.port,
             debug=True,
             threaded=True,
-            use_reloader=False  # Disable reloader to prevent duplicate startup
+            use_reloader=False
         )
     except KeyboardInterrupt:
         print("\nServer stopped by user")

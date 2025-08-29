@@ -16,6 +16,6 @@ external_data = {
     "host": "10.0.10.100",
     "port": str(5432),
     "dbname": "HorusWebMoviePlayer",
-    "dbuser": "xxxxxxxxxx",
-    "password": "xxxxxxxxxxx",
+    "dbuser": "pocmsro",
+    "password": "ZSE$%67ujm",
 }

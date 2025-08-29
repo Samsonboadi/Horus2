@@ -42,11 +42,11 @@ class HorusMediaBridge:
 
         logger.warning("Using fallback hardcoded credentials")
         self.db_config = {
-            "host": "10.0.10.100",
-            "port": "5432",
+            "host": "xx.x.xx.xxx",
+            "port": "xxxx",
             "database": "HorusWebMoviePlayer",
-            "user": "pocmsro",
-            "password": "ZSE$%67ujm"
+            "user": "xxxxxxxxxxxx",
+            "password": "xx$%xxxxxxxxx"
         }
 
         # Attempt to connect to Horus and database on initialization

@@ -13,6 +13,13 @@ using Test.Models;
 using Test.Services;
 using Test.ViewModels;
 
+using Test.Services;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+
+
+
 namespace Test.UI
 {
     internal class SphericalViewerViewModel : DockPane, INotifyPropertyChanged
@@ -26,6 +33,13 @@ namespace Test.UI
         private List<ImageFrame> _imageFrames = new List<ImageFrame>();
         private int _currentFrameIndex = 0;
         private bool _isSettingsOpen = false;
+
+        private readonly HorusMediaService _horusService;
+        private List<HorusRecording> _horusRecordings = new List<HorusRecording>();
+        private List<HorusImage> _horusImages = new List<HorusImage>();
+        private HorusRecording _selectedRecording;
+        private int _currentHorusImageIndex = 0;
+        private bool _usingHorusImages = false; // Track which image source we're using
         #endregion
 
         #region Properties
@@ -393,6 +407,13 @@ namespace Test.UI
         public ICommand TestConnectionCommand { get; private set; }
         public ICommand TestDatabaseConnectionCommand { get; private set; }
         public ICommand BrowseDirectoryCommand { get; private set; }
+
+        public ICommand ConnectHorusCommand { get; private set; }
+        public ICommand DisconnectHorusCommand { get; private set; }
+        public ICommand LoadHorusRecordingsCommand { get; private set; }
+        public ICommand LoadHorusImagesCommand { get; private set; }
+        public ICommand StartPythonBridgeCommand { get; private set; }
+        public ICommand TestHorusConnectionCommand { get; private set; }
         #endregion
 
         protected SphericalViewerViewModel()
@@ -401,6 +422,7 @@ namespace Test.UI
             {
                 _apiService = new PythonApiService();
                 _settingsService = new SettingsService();
+                _horusService = new HorusMediaService(); // Add this line
 
                 LoadSettings();
                 InitializeCommands();
@@ -417,7 +439,6 @@ namespace Test.UI
                 StatusMessage = $"Initialization error: {ex.Message}";
             }
         }
-
         protected override Task InitializeAsync()
         {
             StatusMessage = "Dock pane initialized and ready";
@@ -443,9 +464,299 @@ namespace Test.UI
             TestConnectionCommand = new AsyncRelayCommand(TestConnectionAsync);
             TestDatabaseConnectionCommand = new AsyncRelayCommand(TestDatabaseConnectionAsync);
             BrowseDirectoryCommand = new RelayCommand(BrowseDirectory);
+            ConnectHorusCommand = new AsyncRelayCommand(ConnectToHorusAsync);
+            DisconnectHorusCommand = new AsyncRelayCommand(DisconnectFromHorusAsync);
+            LoadHorusRecordingsCommand = new AsyncRelayCommand(LoadHorusRecordingsAsync);
+            LoadHorusImagesCommand = new AsyncRelayCommand(LoadHorusImagesAsync);
+            StartPythonBridgeCommand = new AsyncRelayCommand(StartPythonBridgeAsync);
+            TestHorusConnectionCommand = new AsyncRelayCommand(TestHorusConnectionAsync);
         }
 
         #region Command Methods
+
+
+
+        private async Task StartPythonBridgeAsync()
+        {
+            try
+            {
+                StatusMessage = "Starting Python bridge server...";
+
+                // Path to your Python bridge script
+                string scriptPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Scripts", "horus_bridge_server.py");
+
+                // Use ArcGIS Pro Python executable
+                string pythonExe = @"C:\Program Files\ArcGIS\Pro\bin\Python\envs\arcgispro-py3\python.exe";
+
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = pythonExe,
+                    Arguments = $"\"{scriptPath}\"",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                };
+
+                var process = Process.Start(startInfo);
+
+                // Give the server time to start
+                await Task.Delay(3000);
+
+                // Test if the server is running
+                var healthCheck = await _horusService.CheckHealthAsync();
+                if (healthCheck.Success)
+                {
+                    StatusMessage = "Python bridge server started successfully";
+                }
+                else
+                {
+                    StatusMessage = "Python bridge server may not have started correctly";
+                }
+            }
+            catch (Exception ex)
+            {
+                StatusMessage = $"Failed to start Python bridge: {ex.Message}";
+            }
+        }
+
+        private async Task TestHorusConnectionAsync()
+        {
+            try
+            {
+                StatusMessage = "Testing Horus connection...";
+
+                // First check if Python bridge is running
+                var healthCheck = await _horusService.CheckHealthAsync();
+                if (!healthCheck.Success)
+                {
+                    StatusMessage = "Python bridge server is not running. Start it first.";
+                    return;
+                }
+
+                StatusMessage = healthCheck.Data ? "Horus connection test successful" : "Horus connection test failed";
+                IsHorusConnected = healthCheck.Data;
+            }
+            catch (Exception ex)
+            {
+                StatusMessage = $"Horus connection test failed: {ex.Message}";
+                IsHorusConnected = false;
+            }
+        }
+
+        private async Task ConnectToHorusAsync()
+        {
+            try
+            {
+                IsLoading = true;
+                StatusMessage = "Connecting to Horus media server...";
+
+                var config = new HorusConnectionConfig
+                {
+                    HorusHost = HorusClientUrl.Replace("http://", "").Replace("https://", "").Split(':')[0],
+                    HorusPort = 5050,
+                    DatabaseHost = DatabaseHost,
+                    DatabasePort = DatabasePort,
+                    DatabaseName = DatabaseName,
+                    DatabaseUser = DatabaseUser,
+                    DatabasePassword = DatabasePassword
+                };
+
+                var result = await _horusService.ConnectAsync(config);
+
+                if (result.Success && result.Data)
+                {
+                    IsHorusConnected = true;
+                    StatusMessage = "Connected to Horus media server successfully";
+
+                    // Automatically load recordings after successful connection
+                    await LoadHorusRecordingsAsync();
+                }
+                else
+                {
+                    IsHorusConnected = false;
+                    StatusMessage = $"Failed to connect to Horus: {result.Error}";
+                }
+            }
+            catch (Exception ex)
+            {
+                IsHorusConnected = false;
+                StatusMessage = $"Horus connection error: {ex.Message}";
+            }
+            finally
+            {
+                IsLoading = false;
+            }
+        }
+
+        private async Task DisconnectFromHorusAsync()
+        {
+            try
+            {
+                StatusMessage = "Disconnecting from Horus...";
+
+                var result = await _horusService.DisconnectAsync();
+
+                IsHorusConnected = false;
+                HorusRecordings.Clear();
+                _horusImages.Clear();
+                SelectedRecording = null;
+
+                StatusMessage = result.Success ? "Disconnected from Horus successfully" : $"Disconnect error: {result.Error}";
+            }
+            catch (Exception ex)
+            {
+                StatusMessage = $"Disconnect error: {ex.Message}";
+            }
+        }
+
+        private async Task LoadHorusRecordingsAsync()
+        {
+            if (!IsHorusConnected)
+            {
+                StatusMessage = "Not connected to Horus server";
+                return;
+            }
+
+            try
+            {
+                IsLoading = true;
+                StatusMessage = "Loading Horus recordings...";
+
+                var response = await _horusService.GetRecordingsAsync();
+
+                if (response.Success && response.Data != null)
+                {
+                    HorusRecordings = new List<HorusRecording>(response.Data);
+                    StatusMessage = $"Loaded {HorusRecordings.Count} recordings from Horus";
+
+                    // Auto-select the first recording if available
+                    if (HorusRecordings.Count > 0)
+                    {
+                        SelectedRecording = HorusRecordings.FirstOrDefault(r =>
+                            r.Endpoint.Contains(RecordingEndpoint) ||
+                            r.Endpoint.Contains("Rotterdam360")) ?? HorusRecordings[0];
+                    }
+                }
+                else
+                {
+                    StatusMessage = $"Failed to load recordings: {response.Error}";
+                }
+            }
+            catch (Exception ex)
+            {
+                StatusMessage = $"Error loading recordings: {ex.Message}";
+            }
+            finally
+            {
+                IsLoading = false;
+            }
+        }
+
+        private async Task LoadHorusImagesAsync()
+        {
+            if (!IsHorusConnected || SelectedRecording == null)
+            {
+                StatusMessage = "Please connect to Horus and select a recording first";
+                return;
+            }
+
+            try
+            {
+                IsLoading = true;
+                StatusMessage = "Loading images from Horus...";
+
+                var request = new HorusImageRequest
+                {
+                    RecordingEndpoint = SelectedRecording.Endpoint,
+                    Count = DefaultNumberOfImages,
+                    Width = DefaultImageWidth,
+                    Height = DefaultImageHeight
+                };
+
+                var response = await _horusService.GetImagesAsync(request);
+
+                if (response.Success && response.Data != null)
+                {
+                    _horusImages = response.Data;
+                    _currentHorusImageIndex = 0;
+
+                    // Convert first image and display it
+                    if (_horusImages.Count > 0)
+                    {
+                        await DisplayHorusImageAsync(0);
+                        CanNavigateFrames = _horusImages.Count > 1;
+                        UpdateHorusFrameInfo();
+                    }
+
+                    StatusMessage = $"Loaded {_horusImages.Count} images from Horus";
+                }
+                else
+                {
+                    StatusMessage = $"Failed to load images: {response.Error}";
+                }
+            }
+            catch (Exception ex)
+            {
+                StatusMessage = $"Error loading images: {ex.Message}";
+            }
+            finally
+            {
+                IsLoading = false;
+            }
+        }
+
+        private async Task DisplayHorusImageAsync(int imageIndex)
+        {
+            try
+            {
+                if (imageIndex < 0 || imageIndex >= _horusImages.Count)
+                    return;
+
+                var horusImage = _horusImages[imageIndex];
+                var imageBytes = horusImage.GetImageBytes();
+
+                if (imageBytes != null)
+                {
+                    // Apply spherical projection and camera parameters
+                    var renderRequest = new RenderRequest
+                    {
+                        ImagePath = "horus_temp_image", // Placeholder
+                        Yaw = Yaw,
+                        Pitch = Pitch,
+                        Roll = Roll,
+                        Fov = Fov,
+                        Width = DefaultImageWidth,
+                        Height = DefaultImageHeight
+                    };
+
+                    // For now, display the image directly
+                    // Later you can implement spherical projection via your Python API
+                    CurrentImage = CreateBitmapFromBytes(imageBytes);
+                    OnPropertyChanged(nameof(HasImage));
+
+                    _currentHorusImageIndex = imageIndex;
+                }
+            }
+            catch (Exception ex)
+            {
+                StatusMessage = $"Error displaying image: {ex.Message}";
+            }
+        }
+
+        private void UpdateHorusFrameInfo()
+        {
+            if (_horusImages.Count > 0)
+            {
+                FrameInfo = $"Horus Image: {_currentHorusImageIndex + 1}/{_horusImages.Count}";
+            }
+            else
+            {
+                FrameInfo = "No Horus images loaded";
+            }
+        }
+
+
         private async Task ConnectToServerAsync()
         {
             try
@@ -474,6 +785,27 @@ namespace Test.UI
                 IsLoading = false;
             }
         }
+
+
+        public List<HorusRecording> HorusRecordings
+        {
+            get => _horusRecordings;
+            set => SetProperty(ref _horusRecordings, value);
+        }
+
+        public HorusRecording SelectedRecording
+        {
+            get => _selectedRecording;
+            set => SetProperty(ref _selectedRecording, value);
+        }
+
+        private bool _isHorusConnected = false;
+        public bool IsHorusConnected
+        {
+            get => _isHorusConnected;
+            set => SetProperty(ref _isHorusConnected, value);
+        }
+
 
         private async Task TestConnectionAsync()
         {
@@ -622,7 +954,13 @@ namespace Test.UI
 
         private async void PreviousFrame()
         {
-            if (_currentFrameIndex > 0)
+            if (_horusImages.Count > 0 && _currentHorusImageIndex > 0)
+            {
+                await DisplayHorusImageAsync(_currentHorusImageIndex - 1);
+                UpdateHorusFrameInfo();
+                CommandManager.InvalidateRequerySuggested();
+            }
+            else if (_currentFrameIndex > 0) // Fallback to original logic
             {
                 _currentFrameIndex--;
                 await LoadCurrentFrameAsync();
@@ -633,7 +971,13 @@ namespace Test.UI
 
         private async void NextFrame()
         {
-            if (_currentFrameIndex < _imageFrames.Count - 1)
+            if (_horusImages.Count > 0 && _currentHorusImageIndex < _horusImages.Count - 1)
+            {
+                await DisplayHorusImageAsync(_currentHorusImageIndex + 1);
+                UpdateHorusFrameInfo();
+                CommandManager.InvalidateRequerySuggested();
+            }
+            else if (_currentFrameIndex < _imageFrames.Count - 1) // Fallback to original logic
             {
                 _currentFrameIndex++;
                 await LoadCurrentFrameAsync();
@@ -644,7 +988,13 @@ namespace Test.UI
 
         private async void FirstFrame()
         {
-            if (_imageFrames.Count > 0)
+            if (_horusImages.Count > 0)
+            {
+                await DisplayHorusImageAsync(0);
+                UpdateHorusFrameInfo();
+                CommandManager.InvalidateRequerySuggested();
+            }
+            else if (_imageFrames.Count > 0)
             {
                 _currentFrameIndex = 0;
                 await LoadCurrentFrameAsync();
@@ -655,7 +1005,13 @@ namespace Test.UI
 
         private async void LastFrame()
         {
-            if (_imageFrames.Count > 0)
+            if (_horusImages.Count > 0)
+            {
+                await DisplayHorusImageAsync(_horusImages.Count - 1);
+                UpdateHorusFrameInfo();
+                CommandManager.InvalidateRequerySuggested();
+            }
+            else if (_imageFrames.Count > 0)
             {
                 _currentFrameIndex = _imageFrames.Count - 1;
                 await LoadCurrentFrameAsync();
@@ -783,6 +1139,30 @@ namespace Test.UI
 
         private async Task UpdateImageViewAsync()
         {
+            // Handle Horus images
+            if (_usingHorusImages && _horusImages.Count > 0 && _currentHorusImageIndex < _horusImages.Count)
+            {
+                try
+                {
+                    var horusImage = _horusImages[_currentHorusImageIndex];
+                    var imageBytes = horusImage.GetImageBytes();
+
+                    if (imageBytes != null)
+                    {
+                        // For now, display Horus image directly
+                        // TODO: Later implement spherical projection via your Python API
+                        CurrentImage = CreateBitmapFromBytes(imageBytes);
+                        OnPropertyChanged(nameof(HasImage));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    StatusMessage = $"Error displaying Horus image: {ex.Message}";
+                }
+                return;
+            }
+
+            // Handle regular images (your existing logic)
             if (_currentFrame == null) return;
 
             try

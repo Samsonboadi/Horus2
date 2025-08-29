@@ -73,6 +73,17 @@
             <Setter Property="MinHeight" Value="24"/>
         </Style>
 
+        <!-- Professional PasswordBox Style -->
+        <Style x:Key="EsriPasswordBox" TargetType="PasswordBox">
+            <Setter Property="Background" Value="{StaticResource EsriWhite}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource EsriLightGray}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="6,4"/>
+            <Setter Property="FontFamily" Value="Segoe UI"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="MinHeight" Value="24"/>
+        </Style>
+
         <!-- Professional GroupBox Style -->
         <Style x:Key="EsriGroupBox" TargetType="GroupBox">
             <Setter Property="BorderBrush" Value="{StaticResource EsriLightGray}"/>
@@ -297,10 +308,184 @@
                     </Grid>
                 </GroupBox>
 
+                <!-- Database Connection Settings -->
+                <GroupBox Header="Database Connection" Style="{StaticResource EsriGroupBox}">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <!-- Database Host -->
+                        <Grid Grid.Row="0" Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="120"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="80"/>
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Grid.Column="0" 
+                                       Text="Host:" 
+                                       Style="{StaticResource EsriLabel}"
+                                       VerticalAlignment="Center"
+                                       Margin="0"/>
+                            <TextBox Grid.Column="1" 
+                                     Text="{Binding DatabaseHost}" 
+                                     Style="{StaticResource EsriTextBox}"
+                                     Margin="0,0,8,0"
+                                     ToolTip="Database server host (e.g., localhost or IP address)"/>
+                            <TextBox Grid.Column="2" 
+                                     Text="{Binding DatabasePort}" 
+                                     Style="{StaticResource EsriTextBox}"
+                                     ToolTip="Port number"/>
+                        </Grid>
+
+                        <!-- Database Name -->
+                        <Grid Grid.Row="1" Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="120"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Grid.Column="0" 
+                                       Text="Database:" 
+                                       Style="{StaticResource EsriLabel}"
+                                       VerticalAlignment="Center"
+                                       Margin="0"/>
+                            <TextBox Grid.Column="1" 
+                                     Text="{Binding DatabaseName}" 
+                                     Style="{StaticResource EsriTextBox}"/>
+                        </Grid>
+
+                        <!-- Database User -->
+                        <Grid Grid.Row="2" Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="120"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Grid.Column="0" 
+                                       Text="Username:" 
+                                       Style="{StaticResource EsriLabel}"
+                                       VerticalAlignment="Center"
+                                       Margin="0"/>
+                            <TextBox Grid.Column="1" 
+                                     Text="{Binding DatabaseUser}" 
+                                     Style="{StaticResource EsriTextBox}"/>
+                        </Grid>
+
+                        <!-- Database Password -->
+                        <Grid Grid.Row="3" Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="120"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Grid.Column="0" 
+                                       Text="Password:" 
+                                       Style="{StaticResource EsriLabel}"
+                                       VerticalAlignment="Center"
+                                       Margin="0"/>
+                            <PasswordBox x:Name="DatabasePasswordBox"
+                                         Grid.Column="1" 
+                                         Style="{StaticResource EsriPasswordBox}"
+                                         PasswordChanged="DatabasePasswordBox_PasswordChanged"/>
+                        </Grid>
+
+                        <!-- Database Connection Status and Test -->
+                        <Grid Grid.Row="4" Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="120"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Grid.Column="0" 
+                                       Text="DB Status:" 
+                                       Style="{StaticResource EsriLabel}"
+                                       VerticalAlignment="Center"
+                                       Margin="0"/>
+
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Ellipse Width="12" Height="12" Margin="0,0,8,0">
+                                    <Ellipse.Style>
+                                        <Style TargetType="Ellipse">
+                                            <Setter Property="Fill" Value="{StaticResource EsriError}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsDatabaseConnected}" Value="True">
+                                                    <Setter Property="Fill" Value="{StaticResource EsriSuccess}"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Ellipse.Style>
+                                </Ellipse>
+                                <TextBlock VerticalAlignment="Center" 
+                                           FontFamily="Segoe UI"
+                                           FontSize="12">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Text" Value="Not Connected"/>
+                                            <Setter Property="Foreground" Value="{StaticResource EsriError}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsDatabaseConnected}" Value="True">
+                                                    <Setter Property="Text" Value="Connected"/>
+                                                    <Setter Property="Foreground" Value="{StaticResource EsriSuccess}"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </StackPanel>
+
+                            <Button Grid.Column="2" 
+                                    Content="Test DB" 
+                                    Style="{StaticResource EsriSecondaryButton}"
+                                    Command="{Binding TestDatabaseConnectionCommand}"
+                                    MinWidth="80"/>
+                        </Grid>
+
+                        <!-- Recording Endpoint and Horus Client URL -->
+                        <Grid Grid.Row="5">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="120"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <TextBlock Grid.Row="0" Grid.Column="0" 
+                                       Text="Recording:" 
+                                       Style="{StaticResource EsriLabel}"
+                                       VerticalAlignment="Center"
+                                       Margin="0,0,0,8"/>
+                            <TextBox Grid.Row="0" Grid.Column="1" 
+                                     Text="{Binding RecordingEndpoint}" 
+                                     Style="{StaticResource EsriTextBox}"
+                                     Margin="0,0,0,8"/>
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" 
+                                       Text="Horus URL:" 
+                                       Style="{StaticResource EsriLabel}"
+                                       VerticalAlignment="Center"
+                                       Margin="0"/>
+                            <TextBox Grid.Row="1" Grid.Column="1" 
+                                     Text="{Binding HorusClientUrl}" 
+                                     Style="{StaticResource EsriTextBox}"/>
+                        </Grid>
+                    </Grid>
+                </GroupBox>
+
                 <!-- Image Settings -->
                 <GroupBox Header="Image Settings" Style="{StaticResource EsriGroupBox}">
                     <Grid>
                         <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
@@ -378,7 +563,7 @@
                         </Grid>
 
                         <!-- Include Subdirectories -->
-                        <Grid Grid.Row="3">
+                        <Grid Grid.Row="3" Margin="0,0,0,12">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="120"/>
                                 <ColumnDefinition Width="*"/>
@@ -395,6 +580,36 @@
                                       Style="{StaticResource EsriCheckBox}"
                                       Content="Include images in subdirectories"
                                       VerticalAlignment="Center"/>
+                        </Grid>
+
+                        <!-- Image Dimensions -->
+                        <Grid Grid.Row="4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="120"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="8"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Grid.Column="0" 
+                                       Text="Image Size:" 
+                                       Style="{StaticResource EsriLabel}"
+                                       VerticalAlignment="Center"
+                                       Margin="0"/>
+
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                <TextBlock Text="W:" Style="{StaticResource EsriLabel}" Margin="0,0,4,0"/>
+                                <TextBox Text="{Binding DefaultImageWidth}" 
+                                         Style="{StaticResource EsriTextBox}"
+                                         Width="60"/>
+                            </StackPanel>
+
+                            <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
+                                <TextBlock Text="H:" Style="{StaticResource EsriLabel}" Margin="0,0,4,0"/>
+                                <TextBox Text="{Binding DefaultImageHeight}" 
+                                         Style="{StaticResource EsriTextBox}"
+                                         Width="60"/>
+                            </StackPanel>
                         </Grid>
                     </Grid>
                 </GroupBox>

@@ -3,16 +3,14 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-             xmlns:local="clr-namespace:Test.Converters"
-             xmlns:ui="clr-namespace:Test.UI"
              mc:Ignorable="d" 
              d:DesignHeight="800" d:DesignWidth="600"
              MinWidth="500"
              MinHeight="600">
 
     <UserControl.Resources>
-        <!-- Import Converters -->
-        <local:BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
+        <!-- Use built-in BooleanToVisibilityConverter instead of custom one -->
+        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
 
         <!-- ArcGIS Pro Professional Color Palette -->
         <SolidColorBrush x:Key="EsriBlue" Color="#0079C1"/>
@@ -160,474 +158,612 @@
 
     <!-- Main Container -->
     <Grid Background="{StaticResource EsriBackground}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
 
-        <!-- Main View -->
-        <Grid>
-            <Grid.Style>
-                <Style TargetType="Grid">
-                    <Setter Property="Visibility" Value="Visible"/>
-                    <Style.Triggers>
-                        <DataTrigger Binding="{Binding IsSettingsOpen}" Value="True">
-                            <Setter Property="Visibility" Value="Collapsed"/>
-                        </DataTrigger>
-                    </Style.Triggers>
-                </Style>
-            </Grid.Style>
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="*"/>
-                <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
+        <!-- Professional Header -->
+        <Border Grid.Row="0" 
+                Background="{StaticResource EsriDarkGray}" 
+                BorderBrush="{StaticResource EsriGray}" 
+                BorderThickness="0,0,0,1"
+                Padding="12,8">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
 
-            <!-- Professional Header -->
-            <Border Grid.Row="0" 
-                    Background="{StaticResource EsriDarkGray}" 
-                    BorderBrush="{StaticResource EsriGray}" 
-                    BorderThickness="0,0,0,1"
-                    Padding="12,8">
-                <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
+                <Image Grid.Column="0" 
+                       Width="16" Height="16" 
+                       Margin="0,0,8,0"
+                       VerticalAlignment="Center">
+                    <!-- You can add an icon here -->
+                </Image>
 
-                    <Image Grid.Column="0" 
-                           Width="16" Height="16" 
-                           Margin="0,0,8,0"
-                           VerticalAlignment="Center">
-                        <!-- You can add an icon here -->
-                    </Image>
+                <TextBlock Grid.Column="1"
+                           Text="Spherical Image Viewer" 
+                           Foreground="White" 
+                           FontFamily="Segoe UI"
+                           FontSize="14" 
+                           FontWeight="SemiBold"
+                           VerticalAlignment="Center"/>
 
-                    <TextBlock Grid.Column="1"
-                               Text="Spherical Image Viewer" 
-                               Foreground="White" 
-                               FontFamily="Segoe UI"
-                               FontSize="14" 
-                               FontWeight="SemiBold"
-                               VerticalAlignment="Center"/>
+                <Button Grid.Column="2" 
+                        Content="Settings..." 
+                        Style="{StaticResource EsriSecondaryButton}"
+                        Command="{Binding OpenSettingsCommand}"
+                        Background="Transparent"
+                        BorderBrush="{StaticResource EsriGray}"
+                        Foreground="White"
+                        FontSize="11"
+                        Padding="8,4"/>
+            </Grid>
+        </Border>
 
-                    <Button Grid.Column="2" 
-                            Content="Settings..." 
-                            Style="{StaticResource EsriSecondaryButton}"
-                            Command="{Binding OpenSettingsCommand}"
-                            Background="Transparent"
-                            BorderBrush="{StaticResource EsriGray}"
-                            Foreground="White"
-                            FontSize="11"
-                            Padding="8,4"/>
-                </Grid>
-            </Border>
+        <!-- Main Content Area -->
+        <ScrollViewer Grid.Row="1" 
+                      VerticalScrollBarVisibility="Auto" 
+                      HorizontalScrollBarVisibility="Disabled"
+                      Padding="8">
+            <StackPanel>
 
-            <!-- Main Content Area -->
-            <ScrollViewer Grid.Row="1" 
-                          VerticalScrollBarVisibility="Auto" 
-                          HorizontalScrollBarVisibility="Disabled"
-                          Padding="8">
-                <StackPanel>
+                <!-- Image Display Section -->
+                <GroupBox Header="360° Image View" Style="{StaticResource EsriGroupBox}">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="400"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
 
-                    <!-- Image Display Section -->
-                    <GroupBox Header="360° Image View" Style="{StaticResource EsriGroupBox}">
-                        <Grid>
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="400"/>
-                                <RowDefinition Height="Auto"/>
-                            </Grid.RowDefinitions>
+                        <!-- Toolbar -->
+                        <ToolBarTray Grid.Row="0" Margin="0,0,0,8" Background="Transparent">
+                            <ToolBar Background="Transparent" BorderThickness="0">
+                                <Button Content="Load Images" 
+                                        Style="{StaticResource EsriButton}"
+                                        Command="{Binding LoadImagesCommand}"
+                                        IsEnabled="{Binding IsConnected}"
+                                        ToolTip="Load images from server"/>
+                                <Separator/>
+                                <Button Content="Refresh" 
+                                        Style="{StaticResource EsriToolButton}"
+                                        Command="{Binding RefreshCommand}"
+                                        ToolTip="Refresh current view"/>
+                                <Button Content="Reset" 
+                                        Style="{StaticResource EsriToolButton}"
+                                        Command="{Binding ResetViewCommand}"
+                                        ToolTip="Reset camera to default position"/>
+                            </ToolBar>
+                        </ToolBarTray>
 
-                            <!-- Toolbar -->
-                            <ToolBarTray Grid.Row="0" Margin="0,0,0,8" Background="Transparent">
-                                <ToolBar Background="Transparent" BorderThickness="0">
-                                    <Button Content="Load Images" 
-                                            Style="{StaticResource EsriButton}"
-                                            Command="{Binding LoadImagesCommand}"
-                                            IsEnabled="{Binding IsConnected}"
-                                            ToolTip="Load images from server"/>
-                                    <Separator/>
-                                    <Button Content="Refresh" 
-                                            Style="{StaticResource EsriToolButton}"
-                                            Command="{Binding RefreshCommand}"
-                                            ToolTip="Refresh current view"/>
-                                    <Button Content="Reset" 
-                                            Style="{StaticResource EsriToolButton}"
-                                            Command="{Binding ResetViewCommand}"
-                                            ToolTip="Reset camera to default position"/>
-                                </ToolBar>
-                            </ToolBarTray>
+                        <!-- Image Display Area -->
+                        <Border Grid.Row="1" 
+                                Background="Black" 
+                                BorderBrush="{StaticResource EsriLightGray}"
+                                BorderThickness="1"
+                                Margin="0,0,0,8">
+                            <Grid>
+                                <Image Source="{Binding CurrentImage}" 
+                                       Stretch="Uniform"
+                                       RenderOptions.BitmapScalingMode="HighQuality"/>
 
-                            <!-- Image Path moved to settings - remove this section -->
+                                <!-- Professional Placeholder -->
+                                <StackPanel HorizontalAlignment="Center" 
+                                            VerticalAlignment="Center">
+                                    <StackPanel.Style>
+                                        <Style TargetType="StackPanel">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding HasImage}" Value="False">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </StackPanel.Style>
+                                    <Rectangle Width="64" Height="64" 
+                                             Fill="{StaticResource EsriGray}" 
+                                             Opacity="0.3"
+                                             Margin="0,0,0,12"/>
+                                    <TextBlock Text="No image loaded" 
+                                               FontSize="14" 
+                                               Foreground="White" 
+                                               FontFamily="Segoe UI"
+                                               HorizontalAlignment="Center"/>
+                                    <TextBlock Text="Use 'Load Images' to connect and load spherical images" 
+                                               FontSize="11" 
+                                               Foreground="#CCCCCC" 
+                                               FontFamily="Segoe UI"
+                                               HorizontalAlignment="Center" 
+                                               Margin="0,4,0,0"/>
+                                </StackPanel>
 
-                            <!-- Image Display Area -->
-                            <Border Grid.Row="1" 
-                                    Background="Black" 
-                                    BorderBrush="{StaticResource EsriLightGray}"
-                                    BorderThickness="1"
-                                    Margin="0,0,0,8">
-                                <Grid>
-                                    <Image Source="{Binding CurrentImage}" 
-                                           Stretch="Uniform"
-                                           RenderOptions.BitmapScalingMode="HighQuality"/>
-
-                                    <!-- Professional Placeholder -->
-                                    <StackPanel HorizontalAlignment="Center" 
-                                                VerticalAlignment="Center"
-                                                Visibility="{Binding HasImage, Converter={StaticResource BooleanToVisibilityConverter}, ConverterParameter=inverse}">
-                                        <Rectangle Width="64" Height="64" 
-                                                 Fill="{StaticResource EsriGray}" 
-                                                 Opacity="0.3"
-                                                 Margin="0,0,0,12"/>
-                                        <TextBlock Text="No image loaded" 
-                                                   FontSize="14" 
+                                <!-- Loading Overlay -->
+                                <Border Background="#80000000"
+                                        Visibility="{Binding IsLoading, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                                        <ProgressBar IsIndeterminate="True" Width="120" Height="4" Margin="0,0,0,8"/>
+                                        <TextBlock Text="Processing..." 
                                                    Foreground="White" 
                                                    FontFamily="Segoe UI"
-                                                   HorizontalAlignment="Center"/>
-                                        <TextBlock Text="Use 'Load Images' to connect and load spherical images" 
-                                                   FontSize="11" 
-                                                   Foreground="#CCCCCC" 
-                                                   FontFamily="Segoe UI"
-                                                   HorizontalAlignment="Center" 
-                                                   Margin="0,4,0,0"/>
+                                                   FontSize="12"/>
                                     </StackPanel>
-
-                                    <!-- Loading Overlay -->
-                                    <Border Background="#80000000"
-                                            Visibility="{Binding IsLoading, Converter={StaticResource BooleanToVisibilityConverter}}">
-                                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                                            <ProgressBar IsIndeterminate="True" Width="120" Height="4" Margin="0,0,0,8"/>
-                                            <TextBlock Text="Processing..." 
-                                                       Foreground="White" 
-                                                       FontFamily="Segoe UI"
-                                                       FontSize="12"/>
-                                        </StackPanel>
-                                    </Border>
-                                </Grid>
-                            </Border>
-
-                            <!-- Frame Navigation -->
-                            <Grid Grid.Row="2">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-
-                                <!-- Navigation Controls -->
-                                <StackPanel Grid.Column="0" Orientation="Horizontal">
-                                    <Button Content="⏮" 
-                                            Style="{StaticResource EsriToolButton}"
-                                            Command="{Binding FirstFrameCommand}" 
-                                            ToolTip="First Frame"
-                                            FontSize="14"/>
-                                    <Button Content="⏪" 
-                                            Style="{StaticResource EsriToolButton}"
-                                            Command="{Binding PreviousFrameCommand}" 
-                                            ToolTip="Previous Frame"
-                                            FontSize="14"/>
-                                    <Button Content="⏩" 
-                                            Style="{StaticResource EsriToolButton}"
-                                            Command="{Binding NextFrameCommand}" 
-                                            ToolTip="Next Frame"
-                                            FontSize="14"/>
-                                    <Button Content="⏭" 
-                                            Style="{StaticResource EsriToolButton}"
-                                            Command="{Binding LastFrameCommand}" 
-                                            ToolTip="Last Frame"
-                                            FontSize="14"/>
-                                </StackPanel>
-
-                                <!-- Frame Info -->
-                                <TextBlock Grid.Column="2" 
-                                           Text="{Binding FrameInfo}" 
-                                           Style="{StaticResource EsriLabel}"
-                                           VerticalAlignment="Center"
-                                           FontWeight="Normal"/>
+                                </Border>
                             </Grid>
-                        </Grid>
-                    </GroupBox>
+                        </Border>
 
-                    <!-- Camera Controls Section -->
-                    <GroupBox Header="Camera Controls" Style="{StaticResource EsriGroupBox}">
-                        <Grid Margin="4">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                            </Grid.RowDefinitions>
+                        <!-- Frame Navigation -->
+                        <Grid Grid.Row="2">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
 
-                            <!-- Yaw Control -->
-                            <Grid Grid.Row="0" Margin="0,0,0,12">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="80"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="60"/>
-                                </Grid.ColumnDefinitions>
+                            <!-- Navigation Controls -->
+                            <StackPanel Grid.Column="0" Orientation="Horizontal">
+                                <Button Content="⏮" 
+                                        Style="{StaticResource EsriToolButton}"
+                                        Command="{Binding FirstFrameCommand}" 
+                                        ToolTip="First Frame"
+                                        FontSize="14"/>
+                                <Button Content="⏪" 
+                                        Style="{StaticResource EsriToolButton}"
+                                        Command="{Binding PreviousFrameCommand}" 
+                                        ToolTip="Previous Frame"
+                                        FontSize="14"/>
+                                <Button Content="⏩" 
+                                        Style="{StaticResource EsriToolButton}"
+                                        Command="{Binding NextFrameCommand}" 
+                                        ToolTip="Next Frame"
+                                        FontSize="14"/>
+                                <Button Content="⏭" 
+                                        Style="{StaticResource EsriToolButton}"
+                                        Command="{Binding LastFrameCommand}" 
+                                        ToolTip="Last Frame"
+                                        FontSize="14"/>
+                            </StackPanel>
 
-                                <TextBlock Grid.Column="0" 
-                                           Text="Yaw:" 
-                                           Style="{StaticResource EsriLabel}"
-                                           VerticalAlignment="Center"/>
-                                <Slider Grid.Column="1" 
-                                        Minimum="-180" Maximum="180" 
-                                        Value="{Binding Yaw}"
-                                        Style="{StaticResource EsriSlider}"
-                                        TickFrequency="45"
-                                        IsSnapToTickEnabled="False"
-                                        VerticalAlignment="Center"
-                                        Margin="8,0"/>
-                                <TextBox Grid.Column="2" 
-                                         Text="{Binding Yaw, StringFormat='{}{0:F1}°'}" 
-                                         Style="{StaticResource EsriTextBox}"
-                                         TextAlignment="Center"
-                                         IsReadOnly="True"
-                                         Background="{StaticResource EsriBackground}"/>
-                            </Grid>
-
-                            <!-- Pitch Control -->
-                            <Grid Grid.Row="1" Margin="0,0,0,12">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="80"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="60"/>
-                                </Grid.ColumnDefinitions>
-
-                                <TextBlock Grid.Column="0" 
-                                           Text="Pitch:" 
-                                           Style="{StaticResource EsriLabel}"
-                                           VerticalAlignment="Center"/>
-                                <Slider Grid.Column="1" 
-                                        Minimum="-90" Maximum="90" 
-                                        Value="{Binding Pitch}"
-                                        Style="{StaticResource EsriSlider}"
-                                        TickFrequency="30"
-                                        IsSnapToTickEnabled="False"
-                                        VerticalAlignment="Center"
-                                        Margin="8,0"/>
-                                <TextBox Grid.Column="2" 
-                                         Text="{Binding Pitch, StringFormat='{}{0:F1}°'}" 
-                                         Style="{StaticResource EsriTextBox}"
-                                         TextAlignment="Center"
-                                         IsReadOnly="True"
-                                         Background="{StaticResource EsriBackground}"/>
-                            </Grid>
-
-                            <!-- Roll Control -->
-                            <Grid Grid.Row="2" Margin="0,0,0,12">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="80"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="60"/>
-                                </Grid.ColumnDefinitions>
-
-                                <TextBlock Grid.Column="0" 
-                                           Text="Roll:" 
-                                           Style="{StaticResource EsriLabel}"
-                                           VerticalAlignment="Center"/>
-                                <Slider Grid.Column="1" 
-                                        Minimum="-180" Maximum="180" 
-                                        Value="{Binding Roll}"
-                                        Style="{StaticResource EsriSlider}"
-                                        TickFrequency="45"
-                                        IsSnapToTickEnabled="False"
-                                        VerticalAlignment="Center"
-                                        Margin="8,0"/>
-                                <TextBox Grid.Column="2" 
-                                         Text="{Binding Roll, StringFormat='{}{0:F1}°'}" 
-                                         Style="{StaticResource EsriTextBox}"
-                                         TextAlignment="Center"
-                                         IsReadOnly="True"
-                                         Background="{StaticResource EsriBackground}"/>
-                            </Grid>
-
-                            <!-- FOV Control -->
-                            <Grid Grid.Row="3">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="80"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="60"/>
-                                </Grid.ColumnDefinitions>
-
-                                <TextBlock Grid.Column="0" 
-                                           Text="FOV:" 
-                                           Style="{StaticResource EsriLabel}"
-                                           VerticalAlignment="Center"/>
-                                <Slider Grid.Column="1" 
-                                        Minimum="30" Maximum="180" 
-                                        Value="{Binding Fov}"
-                                        Style="{StaticResource EsriSlider}"
-                                        TickFrequency="30"
-                                        IsSnapToTickEnabled="False"
-                                        VerticalAlignment="Center"
-                                        Margin="8,0"/>
-                                <TextBox Grid.Column="2" 
-                                         Text="{Binding Fov, StringFormat='{}{0:F1}°'}" 
-                                         Style="{StaticResource EsriTextBox}"
-                                         TextAlignment="Center"
-                                         IsReadOnly="True"
-                                         Background="{StaticResource EsriBackground}"/>
-                            </Grid>
-                        </Grid>
-                    </GroupBox>
-
-                    <!-- AI Detection Section -->
-                    <GroupBox Header="AI Object Detection" Style="{StaticResource EsriGroupBox}">
-                        <Grid Margin="4">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="*"/>
-                            </Grid.RowDefinitions>
-
-                            <!-- Model and Target Selection -->
-                            <Grid Grid.Row="0" Margin="0,0,0,8">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="8"/>
-                                    <ColumnDefinition Width="*"/>
-                                </Grid.ColumnDefinitions>
-
-                                <StackPanel Grid.Column="0">
-                                    <TextBlock Text="AI Model:" Style="{StaticResource EsriLabel}"/>
-                                    <ComboBox ItemsSource="{Binding AvailableModels}" 
-                                              SelectedItem="{Binding SelectedModel}"
-                                              FontFamily="Segoe UI"
-                                              FontSize="12"
-                                              Height="24"/>
-                                </StackPanel>
-
-                                <StackPanel Grid.Column="2">
-                                    <TextBlock Text="Detection Target:" Style="{StaticResource EsriLabel}"/>
-                                    <TextBox Text="{Binding DetectionText}" 
-                                             Style="{StaticResource EsriTextBox}"/>
-                                </StackPanel>
-                            </Grid>
-
-                            <!-- Run Detection Button -->
-                            <Button Grid.Row="1" 
-                                    Content="Run Detection" 
-                                    Command="{Binding RunDetectionCommand}"
-                                    Style="{StaticResource EsriButton}"
-                                    IsEnabled="{Binding IsConnected}"
-                                    HorizontalAlignment="Left"
-                                    Margin="0,0,0,12"
-                                    MinWidth="120"/>
-
-                            <!-- Results Header -->
-                            <TextBlock Grid.Row="2"
-                                       Text="{Binding DetectionResults.Count, StringFormat='Detection Results ({0} objects found)'}"
-                                       Style="{StaticResource EsriSectionHeader}"
-                                       Margin="0,0,0,4"/>
-
-                            <!-- Results List -->
-                            <DataGrid Grid.Row="3"
-                                      ItemsSource="{Binding DetectionResults}"
-                                      MaxHeight="150"
-                                      AutoGenerateColumns="False"
-                                      HeadersVisibility="Column"
-                                      GridLinesVisibility="Horizontal"
-                                      RowHeaderWidth="0"
-                                      FontFamily="Segoe UI"
-                                      FontSize="11"
-                                      Background="{StaticResource EsriWhite}"
-                                      BorderBrush="{StaticResource EsriLightGray}"
-                                      BorderThickness="1">
-                                <DataGrid.Columns>
-                                    <DataGridTextColumn Header="Object" Binding="{Binding ObjectName}" Width="*"/>
-                                    <DataGridTextColumn Header="Confidence" Binding="{Binding Confidence, StringFormat=P1}" Width="80"/>
-                                    <DataGridTextColumn Header="Model" Binding="{Binding ModelUsed}" Width="100"/>
-                                </DataGrid.Columns>
-                                <DataGrid.Style>
-                                    <Style TargetType="DataGrid">
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding DetectionResults.Count}" Value="0">
-                                                <Setter Property="Visibility" Value="Collapsed"/>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </DataGrid.Style>
-                            </DataGrid>
-
-                            <!-- No Results Message -->
-                            <TextBlock Grid.Row="3"
-                                       Text="No detection results. Run detection to see results here."
+                            <!-- Frame Info -->
+                            <TextBlock Grid.Column="2" 
+                                       Text="{Binding FrameInfo}" 
                                        Style="{StaticResource EsriLabel}"
-                                       FontStyle="Italic"
-                                       Foreground="{StaticResource EsriGray}"
-                                       HorizontalAlignment="Center"
                                        VerticalAlignment="Center"
-                                       Visibility="{Binding DetectionResults.Count, Converter={StaticResource BooleanToVisibilityConverter}, ConverterParameter=inverse}"/>
+                                       FontWeight="Normal"/>
                         </Grid>
-                    </GroupBox>
+                    </Grid>
+                </GroupBox>
 
-                </StackPanel>
-            </ScrollViewer>
+                <!-- Horus Media Connection Section -->
+                <GroupBox Header="Horus Media Server" Style="{StaticResource EsriGroupBox}">
+                    <Grid Margin="4">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
 
-            <!-- Professional Status Bar -->
-            <Border Grid.Row="2" 
-                    Background="{StaticResource EsriWhite}" 
-                    BorderBrush="{StaticResource EsriLightGray}" 
-                    BorderThickness="0,1,0,0" 
-                    Padding="12,6">
-                <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
+                        <!-- Connection Controls -->
+                        <Grid Grid.Row="0" Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="8"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="8"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
 
-                    <TextBlock Grid.Column="0" 
-                              Text="{Binding StatusMessage}"
-                              Style="{StaticResource EsriLabel}"
-                              VerticalAlignment="Center"
-                              Margin="0"/>
+                            <Button Grid.Column="0"
+                    Content="Start Bridge"
+                    Style="{StaticResource EsriButton}"
+                    Command="{Binding StartPythonBridgeCommand}"
+                    ToolTip="Start Python bridge server"/>
 
-                    <StackPanel Grid.Column="1" Orientation="Horizontal">
-                        <Ellipse Width="8" Height="8" Margin="0,0,6,0" VerticalAlignment="Center">
-                            <Ellipse.Style>
-                                <Style TargetType="Ellipse">
-                                    <Setter Property="Fill" Value="{StaticResource EsriError}"/>
+                            <Button Grid.Column="2"
+                    Content="Test Connection"
+                    Style="{StaticResource EsriSecondaryButton}"
+                    Command="{Binding TestHorusConnectionCommand}"
+                    ToolTip="Test Horus connection"/>
+
+                            <!-- Connect/Disconnect Buttons -->
+                            <StackPanel Grid.Column="4" Orientation="Horizontal">
+                                <Button Content="Connect Horus"
+                        Command="{Binding ConnectHorusCommand}"
+                        ToolTip="Connect to Horus media server">
+                                    <Button.Style>
+                                        <Style TargetType="Button" BasedOn="{StaticResource EsriButton}">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsHorusConnected}" Value="True">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                </Button>
+
+                                <Button Content="Disconnect"
+                        Command="{Binding DisconnectHorusCommand}"
+                        ToolTip="Disconnect from Horus media server">
+                                    <Button.Style>
+                                        <Style TargetType="Button" BasedOn="{StaticResource EsriButton}">
+                                            <Setter Property="Background" Value="{StaticResource EsriWarning}"/>
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsHorusConnected}" Value="True">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                </Button>
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- Connection Status -->
+                        <Grid Grid.Row="1" Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="120"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Grid.Column="0" 
+                       Text="Horus Status:" 
+                       Style="{StaticResource EsriLabel}"
+                       VerticalAlignment="Center"
+                       Margin="0"/>
+
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Ellipse Width="12" Height="12" Margin="0,0,8,0">
+                                    <Ellipse.Style>
+                                        <Style TargetType="Ellipse">
+                                            <Setter Property="Fill" Value="{StaticResource EsriError}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsHorusConnected}" Value="True">
+                                                    <Setter Property="Fill" Value="{StaticResource EsriSuccess}"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Ellipse.Style>
+                                </Ellipse>
+                                <TextBlock VerticalAlignment="Center" 
+                           FontFamily="Segoe UI"
+                           FontSize="12">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Text" Value="Not Connected"/>
+                                            <Setter Property="Foreground" Value="{StaticResource EsriError}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsHorusConnected}" Value="True">
+                                                    <Setter Property="Text" Value="Connected"/>
+                                                    <Setter Property="Foreground" Value="{StaticResource EsriSuccess}"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- Recordings Selection -->
+                        <Grid Grid.Row="2" Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="8"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="Select Recording:" Style="{StaticResource EsriLabel}"/>
+                                <ComboBox ItemsSource="{Binding HorusRecordings}" 
+                          SelectedItem="{Binding SelectedRecording}"
+                          DisplayMemberPath="Name"
+                          FontFamily="Segoe UI"
+                          FontSize="12"
+                          Height="24"
+                          IsEnabled="{Binding IsHorusConnected}"/>
+                            </StackPanel>
+
+                            <Button Grid.Column="2"
+                    Content="Refresh"
+                    Style="{StaticResource EsriSecondaryButton}"
+                    Command="{Binding LoadHorusRecordingsCommand}"
+                    IsEnabled="{Binding IsHorusConnected}"
+                    VerticalAlignment="Bottom"
+                    MinWidth="80"/>
+                        </Grid>
+
+                        <!-- Load Images Button -->
+                        <Button Grid.Row="3"
+                Content="Load Horus Images"
+                Style="{StaticResource EsriButton}"
+                Command="{Binding LoadHorusImagesCommand}"
+                IsEnabled="{Binding IsHorusConnected}"
+                HorizontalAlignment="Left"
+                MinWidth="150"/>
+                    </Grid>
+                </GroupBox>
+
+                <!-- Camera Controls Section -->
+                <GroupBox Header="Camera Controls" Style="{StaticResource EsriGroupBox}">
+                    <Grid Margin="4">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <!-- Yaw Control -->
+                        <Grid Grid.Row="0" Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="80"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="60"/>
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Grid.Column="0" 
+                                       Text="Yaw:" 
+                                       Style="{StaticResource EsriLabel}"
+                                       VerticalAlignment="Center"/>
+                            <Slider Grid.Column="1" 
+                                    Minimum="-180" Maximum="180" 
+                                    Value="{Binding Yaw}"
+                                    Style="{StaticResource EsriSlider}"
+                                    TickFrequency="45"
+                                    IsSnapToTickEnabled="False"
+                                    VerticalAlignment="Center"
+                                    Margin="8,0"/>
+                            <TextBox Grid.Column="2" 
+                                     Text="{Binding Yaw, StringFormat='{}{0:F1}°'}" 
+                                     Style="{StaticResource EsriTextBox}"
+                                     TextAlignment="Center"
+                                     IsReadOnly="True"
+                                     Background="{StaticResource EsriBackground}"/>
+                        </Grid>
+
+                        <!-- Pitch Control -->
+                        <Grid Grid.Row="1" Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="80"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="60"/>
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Grid.Column="0" 
+                                       Text="Pitch:" 
+                                       Style="{StaticResource EsriLabel}"
+                                       VerticalAlignment="Center"/>
+                            <Slider Grid.Column="1" 
+                                    Minimum="-90" Maximum="90" 
+                                    Value="{Binding Pitch}"
+                                    Style="{StaticResource EsriSlider}"
+                                    TickFrequency="30"
+                                    IsSnapToTickEnabled="False"
+                                    VerticalAlignment="Center"
+                                    Margin="8,0"/>
+                            <TextBox Grid.Column="2" 
+                                     Text="{Binding Pitch, StringFormat='{}{0:F1}°'}" 
+                                     Style="{StaticResource EsriTextBox}"
+                                     TextAlignment="Center"
+                                     IsReadOnly="True"
+                                     Background="{StaticResource EsriBackground}"/>
+                        </Grid>
+
+                        <!-- Roll Control -->
+                        <Grid Grid.Row="2" Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="80"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="60"/>
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Grid.Column="0" 
+                                       Text="Roll:" 
+                                       Style="{StaticResource EsriLabel}"
+                                       VerticalAlignment="Center"/>
+                            <Slider Grid.Column="1" 
+                                    Minimum="-180" Maximum="180" 
+                                    Value="{Binding Roll}"
+                                    Style="{StaticResource EsriSlider}"
+                                    TickFrequency="45"
+                                    IsSnapToTickEnabled="False"
+                                    VerticalAlignment="Center"
+                                    Margin="8,0"/>
+                            <TextBox Grid.Column="2" 
+                                     Text="{Binding Roll, StringFormat='{}{0:F1}°'}" 
+                                     Style="{StaticResource EsriTextBox}"
+                                     TextAlignment="Center"
+                                     IsReadOnly="True"
+                                     Background="{StaticResource EsriBackground}"/>
+                        </Grid>
+
+                        <!-- FOV Control -->
+                        <Grid Grid.Row="3">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="80"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="60"/>
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Grid.Column="0" 
+                                       Text="FOV:" 
+                                       Style="{StaticResource EsriLabel}"
+                                       VerticalAlignment="Center"/>
+                            <Slider Grid.Column="1" 
+                                    Minimum="30" Maximum="180" 
+                                    Value="{Binding Fov}"
+                                    Style="{StaticResource EsriSlider}"
+                                    TickFrequency="30"
+                                    IsSnapToTickEnabled="False"
+                                    VerticalAlignment="Center"
+                                    Margin="8,0"/>
+                            <TextBox Grid.Column="2" 
+                                     Text="{Binding Fov, StringFormat='{}{0:F1}°'}" 
+                                     Style="{StaticResource EsriTextBox}"
+                                     TextAlignment="Center"
+                                     IsReadOnly="True"
+                                     Background="{StaticResource EsriBackground}"/>
+                        </Grid>
+                    </Grid>
+                </GroupBox>
+
+                <!-- AI Detection Section -->
+                <!-- AI Detection Section -->
+                <GroupBox Header="AI Object Detection" Style="{StaticResource EsriGroupBox}">
+                    <Grid Margin="4">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+
+                        <!-- Model and Target Selection -->
+                        <Grid Grid.Row="0" Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="8"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="AI Model:" Style="{StaticResource EsriLabel}"/>
+                                <ComboBox ItemsSource="{Binding AvailableModels}" 
+                          SelectedItem="{Binding SelectedModel}"
+                          FontFamily="Segoe UI"
+                          FontSize="12"
+                          Height="24"/>
+                            </StackPanel>
+
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Text="Detection Target:" Style="{StaticResource EsriLabel}"/>
+                                <TextBox Text="{Binding DetectionText}" 
+                         Style="{StaticResource EsriTextBox}"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- Run Detection Button -->
+                        <Button Grid.Row="1" 
+                Content="Run Detection" 
+                Command="{Binding RunDetectionCommand}"
+                Style="{StaticResource EsriButton}"
+                IsEnabled="{Binding IsConnected}"
+                HorizontalAlignment="Left"
+                Margin="0,0,0,12"
+                MinWidth="120"/>
+
+                        <!-- Results Header -->
+                        <TextBlock Grid.Row="2"
+                   Text="{Binding DetectionResults.Count, StringFormat='Detection Results ({0} objects found)'}"
+                   Style="{StaticResource EsriSectionHeader}"
+                   Margin="0,0,0,4"/>
+
+                        <!-- Results List -->
+                        <DataGrid Grid.Row="3"
+                  ItemsSource="{Binding DetectionResults}"
+                  MaxHeight="150"
+                  AutoGenerateColumns="False"
+                  HeadersVisibility="Column"
+                  GridLinesVisibility="Horizontal"
+                  RowHeaderWidth="0"
+                  FontFamily="Segoe UI"
+                  FontSize="11"
+                  Background="{StaticResource EsriWhite}"
+                  BorderBrush="{StaticResource EsriLightGray}"
+                  BorderThickness="1">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Object" Binding="{Binding ObjectName}" Width="*"/>
+                                <DataGridTextColumn Header="Confidence" Binding="{Binding Confidence, StringFormat=P1}" Width="80"/>
+                                <DataGridTextColumn Header="Model" Binding="{Binding ModelUsed}" Width="100"/>
+                            </DataGrid.Columns>
+                            <DataGrid.Style>
+                                <Style TargetType="DataGrid">
                                     <Style.Triggers>
-                                        <DataTrigger Binding="{Binding IsConnected}" Value="True">
-                                            <Setter Property="Fill" Value="{StaticResource EsriSuccess}"/>
+                                        <DataTrigger Binding="{Binding DetectionResults.Count}" Value="0">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
                                         </DataTrigger>
                                     </Style.Triggers>
                                 </Style>
-                            </Ellipse.Style>
-                        </Ellipse>
-                        <TextBlock VerticalAlignment="Center" 
-                                   FontFamily="Segoe UI"
-                                   FontSize="11">
+                            </DataGrid.Style>
+                        </DataGrid>
+
+                        <!-- No Results Message -->
+                        <TextBlock Grid.Row="3"
+                   Text="No detection results. Run detection to see results here."
+                   FontStyle="Italic"
+                   Foreground="{StaticResource EsriGray}"
+                   HorizontalAlignment="Center"
+                   VerticalAlignment="Center">
                             <TextBlock.Style>
-                                <Style TargetType="TextBlock">
-                                    <Setter Property="Text" Value="Disconnected"/>
-                                    <Setter Property="Foreground" Value="{StaticResource EsriError}"/>
+                                <Style TargetType="TextBlock" BasedOn="{StaticResource EsriLabel}">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
                                     <Style.Triggers>
-                                        <DataTrigger Binding="{Binding IsConnected}" Value="True">
-                                            <Setter Property="Text" Value="Connected"/>
-                                            <Setter Property="Foreground" Value="{StaticResource EsriSuccess}"/>
+                                        <DataTrigger Binding="{Binding DetectionResults.Count}" Value="0">
+                                            <Setter Property="Visibility" Value="Visible"/>
                                         </DataTrigger>
                                     </Style.Triggers>
                                 </Style>
                             </TextBlock.Style>
                         </TextBlock>
-                    </StackPanel>
-                </Grid>
-            </Border>
-        </Grid>
+                    </Grid>
+                </GroupBox>
 
-        <!-- Settings View -->
-        <ui:SettingsView DataContext="{Binding}">
-            <ui:SettingsView.Style>
-                <Style TargetType="ui:SettingsView">
-                    <Setter Property="Visibility" Value="Collapsed"/>
-                    <Style.Triggers>
-                        <DataTrigger Binding="{Binding IsSettingsOpen}" Value="True">
-                            <Setter Property="Visibility" Value="Visible"/>
-                        </DataTrigger>
-                    </Style.Triggers>
-                </Style>
-            </ui:SettingsView.Style>
-        </ui:SettingsView>
+            </StackPanel>
+        </ScrollViewer>
 
+        <!-- Professional Status Bar -->
+        <Border Grid.Row="2" 
+                Background="{StaticResource EsriWhite}" 
+                BorderBrush="{StaticResource EsriLightGray}" 
+                BorderThickness="0,1,0,0" 
+                Padding="12,6">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <TextBlock Grid.Column="0" 
+                          Text="{Binding StatusMessage}"
+                          Style="{StaticResource EsriLabel}"
+                          VerticalAlignment="Center"
+                          Margin="0"/>
+
+                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                    <Ellipse Width="8" Height="8" Margin="0,0,6,0" VerticalAlignment="Center">
+                        <Ellipse.Style>
+                            <Style TargetType="Ellipse">
+                                <Setter Property="Fill" Value="{StaticResource EsriError}"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsConnected}" Value="True">
+                                        <Setter Property="Fill" Value="{StaticResource EsriSuccess}"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Ellipse.Style>
+                    </Ellipse>
+                    <TextBlock VerticalAlignment="Center" 
+                               FontFamily="Segoe UI"
+                               FontSize="11">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Text" Value="Disconnected"/>
+                                <Setter Property="Foreground" Value="{StaticResource EsriError}"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsConnected}" Value="True">
+                                        <Setter Property="Text" Value="Connected"/>
+                                        <Setter Property="Foreground" Value="{StaticResource EsriSuccess}"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </StackPanel>
+            </Grid>
+        </Border>
     </Grid>
 </UserControl>

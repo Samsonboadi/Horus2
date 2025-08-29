@@ -12,7 +12,13 @@ namespace Test.UI
         {
             InitializeComponent();
 
-            // Set the initial password if available
+            // Subscribe to DataContext changed event to handle password initialization
+            DataContextChanged += OnDataContextChanged;
+        }
+
+        private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
+        {
+            // Set the initial password if available when DataContext changes
             if (DataContext is SphericalViewerViewModel viewModel && !string.IsNullOrEmpty(viewModel.DatabasePassword))
             {
                 DatabasePasswordBox.Password = viewModel.DatabasePassword;

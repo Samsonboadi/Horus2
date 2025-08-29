@@ -1,0 +1,51 @@
+﻿<?xml version="1.0" encoding="utf-8" ?>
+<ArcGIS defaultAssembly="Test.dll"
+        defaultNamespace="Test"
+        xmlns="http://schemas.esri.com/DADF/Registry"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://schemas.esri.com/DADF/Registry file:///C:/Program%20Files/ArcGIS/Pro/bin/ArcGIS.Desktop.Framework.xsd">
+  <AddInInfo id="{7aacec60-2d58-48e7-a66c-acf695c4a5cb}" version="1.0" desktopVersion="3.5.57366" product="ArcGISPro">
+    <Name>Spherical Image Viewer</Name>
+    <Description>Professional spherical camera image viewer with AI detection capabilities</Description>
+    <Image>Images\AddinDesktop32.png</Image>
+    <Author>samso</Author>
+    <Company>Acme</Company>
+    <Date>8/27/2025 11:46:29 PM</Date>
+    <Subject>Imaging</Subject>
+  </AddInInfo>
+  <modules>
+    <insertModule id="Test_Module" className="Module1" autoLoad="false" caption="Spherical Image Viewer">
+
+      <groups>
+        <group id="Test_Group1" caption="Spherical Viewer" appearsOnAddInTab="true" keytip="SV">
+          <button refID="Test_SphericalViewer_ShowButton" size="large" />
+        </group>
+      </groups>
+
+      <controls>
+        <button id="Test_SphericalViewer_ShowButton"
+                caption="Spherical Viewer"
+                className="Test.UI.SphericalViewerShowButton"
+                loadOnClick="true"
+                smallImage="Images\AddinDesktop16.png"
+                largeImage="Images\AddinDesktop32.png"
+                keytip="SV">
+          <tooltip heading="Spherical Image Viewer">
+            Open the spherical camera image viewer with AI detection capabilities
+          </tooltip>
+        </button>
+      </controls>
+
+      <dockPanes>
+        <dockPane id="Test_SphericalViewer_DockPane"
+                  caption="Spherical Image Viewer"
+                  className="Test.UI.SphericalViewerViewModel"
+                  dock="group"
+                  dockWith="esri_core_contentsDockPane">
+          <content className="Test.UI.SphericalViewerView" />
+        </dockPane>
+      </dockPanes>
+
+    </insertModule>
+  </modules>
+</ArcGIS>

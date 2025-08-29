@@ -1,0 +1,99 @@
+# -------------------------
+# Visual Studio / .NET (ArcGIS Pro SDK)
+# -------------------------
+bin/
+obj/
+[Bb]uild/
+[Ll]og/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.vs/
+*.pdb
+*.cache
+*.log
+*.tlog
+*.lastbuildstate
+*.dbmdl
+*.jfm
+
+# NuGet
+*.nupkg
+*.snupkg
+*.nuspec
+packages/
+project.lock.json
+project.fragment.lock.json
+
+# Rider / Resharper
+.idea/
+*.DotSettings.user
+
+# -------------------------
+# ArcGIS Pro Add-In Specific
+# -------------------------
+# Compiled add-in package
+*.esriAddInX
+
+# Auto-generated DAML cache
+*.daml.xml
+
+# Generated config / deployment folders
+*.addinInfo
+*.addinCache/
+*.esriAddInX.zip
+
+# Local settings
+*.ArcGISAddinX.user
+*.ArcGISProConfig
+
+# -------------------------
+# Python (if you bundle tools/scripts)
+# -------------------------
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pkl
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+env.bak/
+
+# Python packaging
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Jupyter notebooks
+.ipynb_checkpoints/
+
+# -------------------------
+# VS Code
+# -------------------------
+.vscode/
+.history/
+*.code-workspace
+
+# -------------------------
+# OS-specific
+# -------------------------
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~

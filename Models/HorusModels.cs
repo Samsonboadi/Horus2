@@ -1,5 +1,7 @@
 ﻿// Models/HorusModels.cs
 using System;
+using System.Linq;
+using Newtonsoft.Json;
 
 namespace Test.Models
 {
@@ -18,11 +20,23 @@ namespace Test.Models
 
     public class HorusRecording
     {
+        [JsonProperty("Id")]
         public string Id { get; set; }
+
+        [JsonProperty("Endpoint")]
         public string Endpoint { get; set; }
+
+        [JsonProperty("Name")]
         public string Name { get; set; }
+
+        [JsonProperty("Description")]
         public string Description { get; set; }
+
+        [JsonProperty("CreatedDate")]
         public DateTime? CreatedDate { get; set; }
+
+        // Display name for UI binding
+        public string DisplayName => !string.IsNullOrEmpty(Name) ? Name : Endpoint?.Split('\\').LastOrDefault() ?? $"Recording {Id}";
     }
 
     public class HorusImageRequest
@@ -35,9 +49,16 @@ namespace Test.Models
 
     public class HorusImage
     {
+        [JsonProperty("Index")]
         public int Index { get; set; }
+
+        [JsonProperty("Data")]
         public string Data { get; set; } // Base64 encoded image
+
+        [JsonProperty("Format")]
         public string Format { get; set; }
+
+        [JsonProperty("Timestamp")]
         public string Timestamp { get; set; }
 
         // Helper method to convert base64 to byte array
@@ -50,7 +71,7 @@ namespace Test.Models
             {
                 return Convert.FromBase64String(Data);
             }
-            catch
+            catch (Exception)
             {
                 return null;
             }

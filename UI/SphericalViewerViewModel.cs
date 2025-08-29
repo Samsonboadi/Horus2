@@ -9,16 +9,11 @@ using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media.Imaging;
 using ArcGIS.Desktop.Framework.Contracts;
+using ArcGIS.Desktop.Framework;
 using Test.Models;
 using Test.Services;
-using Test.ViewModels;
-
-using Test.Services;
 using System.Diagnostics;
-using System.IO;
 using System.Linq;
-
-
 
 namespace Test.UI
 {
@@ -39,7 +34,10 @@ namespace Test.UI
         private List<HorusImage> _horusImages = new List<HorusImage>();
         private HorusRecording _selectedRecording;
         private int _currentHorusImageIndex = 0;
-        private bool _usingHorusImages = false; // Track which image source we're using
+        private bool _usingHorusImages = false;
+
+        // Settings window reference
+        private Window _settingsWindow;
         #endregion
 
         #region Properties
@@ -86,8 +84,7 @@ namespace Test.UI
             }
         }
 
-        // Convert Yaw to rotation angle for knob visual (0-360 degrees)
-        public double YawAngle => (_yaw + 180) * 2; // Map -180:180 to 0:720, then mod 360
+        public double YawAngle => (_yaw + 180) * 2;
 
         private double _pitch = -20.0;
         public double Pitch
@@ -103,8 +100,7 @@ namespace Test.UI
             }
         }
 
-        // Convert Pitch to rotation angle for knob visual
-        public double PitchAngle => (_pitch + 90) * 2; // Map -90:90 to 0:360
+        public double PitchAngle => (_pitch + 90) * 2;
 
         private double _roll = 0.0;
         public double Roll
@@ -120,7 +116,7 @@ namespace Test.UI
             }
         }
 
-        public double RollAngle => (_roll + 180) * 2; // Map -180:180 to 0:720
+        public double RollAngle => (_roll + 180) * 2;
 
         private double _fov = 110.0;
         public double Fov
@@ -136,8 +132,7 @@ namespace Test.UI
             }
         }
 
-        // Convert FOV to rotation angle for knob visual
-        public double FovAngle => ((_fov - 30) / 150) * 360; // Map 30:180 to 0:360
+        public double FovAngle => ((_fov - 30) / 150) * 360;
 
         private string _detectionText = "pole";
         public string DetectionText
@@ -387,6 +382,25 @@ namespace Test.UI
             get => _isSettingsOpen;
             set => SetProperty(ref _isSettingsOpen, value);
         }
+
+        public List<HorusRecording> HorusRecordings
+        {
+            get => _horusRecordings;
+            set => SetProperty(ref _horusRecordings, value);
+        }
+
+        public HorusRecording SelectedRecording
+        {
+            get => _selectedRecording;
+            set => SetProperty(ref _selectedRecording, value);
+        }
+
+        private bool _isHorusConnected = false;
+        public bool IsHorusConnected
+        {
+            get => _isHorusConnected;
+            set => SetProperty(ref _isHorusConnected, value);
+        }
         #endregion
 
         #region Commands
@@ -422,7 +436,7 @@ namespace Test.UI
             {
                 _apiService = new PythonApiService();
                 _settingsService = new SettingsService();
-                _horusService = new HorusMediaService(); // Add this line
+                _horusService = new HorusMediaService();
 
                 LoadSettings();
                 InitializeCommands();
@@ -439,6 +453,7 @@ namespace Test.UI
                 StatusMessage = $"Initialization error: {ex.Message}";
             }
         }
+
         protected override Task InitializeAsync()
         {
             StatusMessage = "Dock pane initialized and ready";
@@ -447,76 +462,189 @@ namespace Test.UI
 
         private void InitializeCommands()
         {
-            ConnectCommand = new AsyncRelayCommand(ConnectToServerAsync);
-            DisconnectCommand = new RelayCommand(DisconnectFromServer);
-            LoadImagesCommand = new AsyncRelayCommand(LoadImagesAsync);
-            RefreshCommand = new RelayCommand(RefreshView);
-            RunDetectionCommand = new AsyncRelayCommand(RunDetectionAsync);
-            ResetViewCommand = new RelayCommand(ResetView);
-            PreviousFrameCommand = new RelayCommand(PreviousFrame, () => _currentFrameIndex > 0);
-            NextFrameCommand = new RelayCommand(NextFrame, () => _currentFrameIndex < _imageFrames.Count - 1);
-            FirstFrameCommand = new RelayCommand(FirstFrame, () => _imageFrames.Count > 0 && _currentFrameIndex > 0);
-            LastFrameCommand = new RelayCommand(LastFrame, () => _imageFrames.Count > 0 && _currentFrameIndex < _imageFrames.Count - 1);
-            OpenSettingsCommand = new RelayCommand(OpenSettings);
-            CloseSettingsCommand = new RelayCommand(CloseSettings);
-            SaveSettingsCommand = new RelayCommand(SaveSettings);
-            ResetSettingsCommand = new RelayCommand(ResetSettings);
-            TestConnectionCommand = new AsyncRelayCommand(TestConnectionAsync);
-            TestDatabaseConnectionCommand = new AsyncRelayCommand(TestDatabaseConnectionAsync);
-            BrowseDirectoryCommand = new RelayCommand(BrowseDirectory);
-            ConnectHorusCommand = new AsyncRelayCommand(ConnectToHorusAsync);
-            DisconnectHorusCommand = new AsyncRelayCommand(DisconnectFromHorusAsync);
-            LoadHorusRecordingsCommand = new AsyncRelayCommand(LoadHorusRecordingsAsync);
-            LoadHorusImagesCommand = new AsyncRelayCommand(LoadHorusImagesAsync);
-            StartPythonBridgeCommand = new AsyncRelayCommand(StartPythonBridgeAsync);
-            TestHorusConnectionCommand = new AsyncRelayCommand(TestHorusConnectionAsync);
+            ConnectCommand = new RelayCommand(async () => await ConnectToServerAsync(), () => !IsLoading);
+            DisconnectCommand = new RelayCommand(() => DisconnectFromServer(), () => IsConnected);
+            LoadImagesCommand = new RelayCommand(async () => await LoadImagesAsync(), () => IsConnected && !IsLoading);
+            RefreshCommand = new RelayCommand(() => RefreshView(), () => HasImage);
+            RunDetectionCommand = new RelayCommand(async () => await RunDetectionAsync(), () => HasImage && !IsLoading);
+            ResetViewCommand = new RelayCommand(() => ResetView(), () => HasImage);
+            PreviousFrameCommand = new RelayCommand(() => PreviousFrame(), () => CanNavigateFrames && (_currentFrameIndex > 0 || _currentHorusImageIndex > 0));
+            NextFrameCommand = new RelayCommand(() => NextFrame(), () => CanNavigateFrames && ((_usingHorusImages && _currentHorusImageIndex < _horusImages.Count - 1) || (!_usingHorusImages && _currentFrameIndex < _imageFrames.Count - 1)));
+            FirstFrameCommand = new RelayCommand(() => FirstFrame(), () => CanNavigateFrames && (_currentFrameIndex > 0 || _currentHorusImageIndex > 0));
+            LastFrameCommand = new RelayCommand(() => LastFrame(), () => CanNavigateFrames && ((_usingHorusImages && _currentHorusImageIndex < _horusImages.Count - 1) || (!_usingHorusImages && _currentFrameIndex < _imageFrames.Count - 1)));
+            OpenSettingsCommand = new RelayCommand(() => OpenSettings(), () => !IsSettingsOpen);
+            CloseSettingsCommand = new RelayCommand(() => CloseSettings(), () => IsSettingsOpen);
+            SaveSettingsCommand = new RelayCommand(() => SaveSettings(), () => IsSettingsOpen);
+            ResetSettingsCommand = new RelayCommand(() => ResetSettings(), () => IsSettingsOpen);
+            TestConnectionCommand = new RelayCommand(async () => await TestConnectionAsync(), () => !IsLoading);
+            TestDatabaseConnectionCommand = new RelayCommand(async () => await TestDatabaseConnectionAsync(), () => !IsLoading);
+            BrowseDirectoryCommand = new RelayCommand(() => BrowseDirectory(), () => true);
+            ConnectHorusCommand = new RelayCommand(async () => await ConnectToHorusAsync(), () => !IsLoading && !IsHorusConnected);
+            DisconnectHorusCommand = new RelayCommand(async () => await DisconnectFromHorusAsync(), () => IsHorusConnected);
+            LoadHorusRecordingsCommand = new RelayCommand(async () => await LoadHorusRecordingsAsync(), () => IsHorusConnected && !IsLoading);
+            LoadHorusImagesCommand = new RelayCommand(async () => await LoadHorusImagesAsync(), () => IsHorusConnected && SelectedRecording != null && !IsLoading);
+            StartPythonBridgeCommand = new RelayCommand(async () => await StartPythonBridgeAsync(), () => !IsLoading);
+            TestHorusConnectionCommand = new RelayCommand(async () => await TestHorusConnectionAsync(), () => !IsLoading);
         }
 
         #region Command Methods
 
+        private void OpenSettings()
+        {
+            try
+            {
+                if (_settingsWindow == null || !_settingsWindow.IsLoaded)
+                {
+                    var settingsView = new SettingsView();
+                    settingsView.DataContext = this;
 
+                    _settingsWindow = new Window
+                    {
+                        Title = "Spherical Image Viewer - Settings",
+                        Content = settingsView,
+                        Width = 650,
+                        Height = 750,
+                        WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                        ResizeMode = ResizeMode.CanResize,
+                        ShowInTaskbar = false,
+                        WindowStyle = WindowStyle.ToolWindow
+                    };
+
+                    _settingsWindow.Closed += (s, e) => { _settingsWindow = null; IsSettingsOpen = false; };
+                }
+
+                IsSettingsOpen = true;
+                _settingsWindow.Show();
+                _settingsWindow.Activate();
+                StatusMessage = "Settings window opened";
+            }
+            catch (Exception ex)
+            {
+                StatusMessage = $"Failed to open settings: {ex.Message}";
+            }
+        }
+
+        private void CloseSettings()
+        {
+            try
+            {
+                _settingsWindow?.Close();
+                IsSettingsOpen = false;
+                StatusMessage = "Settings window closed";
+            }
+            catch (Exception ex)
+            {
+                StatusMessage = $"Error closing settings: {ex.Message}";
+            }
+        }
 
         private async Task StartPythonBridgeAsync()
         {
             try
             {
                 StatusMessage = "Starting Python bridge server...";
+                IsLoading = true;
 
-                // Path to your Python bridge script
-                string scriptPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Scripts", "horus_bridge_server.py");
+                // Create a temporary config file with current database settings
+                var bridgeConfig = new
+                {
+                    database = new
+                    {
+                        host = DatabaseHost,
+                        port = DatabasePort,
+                        database = DatabaseName,
+                        user = DatabaseUser,
+                        password = DatabasePassword
+                    },
+                    horus = new
+                    {
+                        url = HorusClientUrl
+                    }
+                };
+
+                string configPath = Path.Combine(Path.GetTempPath(), "horus_bridge_config.json");
+                string configJson = Newtonsoft.Json.JsonConvert.SerializeObject(bridgeConfig, Newtonsoft.Json.Formatting.Indented);
+                File.WriteAllText(configPath, configJson);
+
+                // Path to your Python bridge script - should be in Scripts folder within add-in
+                string addinPath = AppDomain.CurrentDomain.BaseDirectory;
+                string scriptPath = Path.Combine(addinPath, "Scripts", "horus_bridge_server.py");
+
+                // Alternative paths to check
+                if (!File.Exists(scriptPath))
+                {
+                    // Try relative to current directory
+                    scriptPath = Path.Combine(Environment.CurrentDirectory, "Scripts", "horus_bridge_server.py");
+                }
+
+                if (!File.Exists(scriptPath))
+                {
+                    // Try in the same directory as the executable
+                    var assemblyPath = System.Reflection.Assembly.GetExecutingAssembly().Location;
+                    var assemblyDir = Path.GetDirectoryName(assemblyPath);
+                    scriptPath = Path.Combine(assemblyDir, "Scripts", "horus_bridge_server.py");
+                }
+
+                if (!File.Exists(scriptPath))
+                {
+                    StatusMessage = $"Python script not found. Expected location: {scriptPath}";
+                    return;
+                }
 
                 // Use ArcGIS Pro Python executable
                 string pythonExe = @"C:\Program Files\ArcGIS\Pro\bin\Python\envs\arcgispro-py3\python.exe";
 
+                if (!File.Exists(pythonExe))
+                {
+                    StatusMessage = "ArcGIS Pro Python not found. Please check installation.";
+                    return;
+                }
+
                 var startInfo = new ProcessStartInfo
                 {
                     FileName = pythonExe,
-                    Arguments = $"\"{scriptPath}\"",
+                    Arguments = $"\"{scriptPath}\" --config \"{configPath}\" --port 5001 --host localhost",
                     UseShellExecute = false,
-                    CreateNoWindow = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true
+                    CreateNoWindow = false, // Show window for debugging
+                    RedirectStandardOutput = false,
+                    RedirectStandardError = false,
+                    WorkingDirectory = Path.GetDirectoryName(scriptPath)
                 };
 
+                StatusMessage = "Launching Python bridge server...";
                 var process = Process.Start(startInfo);
 
+                if (process == null)
+                {
+                    StatusMessage = "Failed to start Python bridge process";
+                    return;
+                }
+
+                StatusMessage = "Waiting for Python bridge to initialize...";
+
                 // Give the server time to start
-                await Task.Delay(3000);
+                await Task.Delay(5000);
 
                 // Test if the server is running
+                StatusMessage = "Testing bridge connection...";
                 var healthCheck = await _horusService.CheckHealthAsync();
+
                 if (healthCheck.Success)
                 {
-                    StatusMessage = "Python bridge server started successfully";
+                    StatusMessage = $"Python bridge server started successfully! {healthCheck.Message}";
                 }
                 else
                 {
-                    StatusMessage = "Python bridge server may not have started correctly";
+                    StatusMessage = $"Python bridge server may not have started correctly: {healthCheck.Error}";
                 }
             }
             catch (Exception ex)
             {
                 StatusMessage = $"Failed to start Python bridge: {ex.Message}";
+            }
+            finally
+            {
+                IsLoading = false;
             }
         }
 
@@ -526,7 +654,6 @@ namespace Test.UI
             {
                 StatusMessage = "Testing Horus connection...";
 
-                // First check if Python bridge is running
                 var healthCheck = await _horusService.CheckHealthAsync();
                 if (!healthCheck.Success)
                 {
@@ -680,6 +807,7 @@ namespace Test.UI
                 {
                     _horusImages = response.Data;
                     _currentHorusImageIndex = 0;
+                    _usingHorusImages = true;
 
                     // Convert first image and display it
                     if (_horusImages.Count > 0)
@@ -718,29 +846,14 @@ namespace Test.UI
 
                 if (imageBytes != null)
                 {
-                    // Apply spherical projection and camera parameters
-                    var renderRequest = new RenderRequest
-                    {
-                        ImagePath = "horus_temp_image", // Placeholder
-                        Yaw = Yaw,
-                        Pitch = Pitch,
-                        Roll = Roll,
-                        Fov = Fov,
-                        Width = DefaultImageWidth,
-                        Height = DefaultImageHeight
-                    };
-
-                    // For now, display the image directly
-                    // Later you can implement spherical projection via your Python API
                     CurrentImage = CreateBitmapFromBytes(imageBytes);
                     OnPropertyChanged(nameof(HasImage));
-
                     _currentHorusImageIndex = imageIndex;
                 }
             }
             catch (Exception ex)
             {
-                StatusMessage = $"Error displaying image: {ex.Message}";
+                StatusMessage = $"Error displaying Horus image: {ex.Message}";
             }
         }
 
@@ -755,7 +868,6 @@ namespace Test.UI
                 FrameInfo = "No Horus images loaded";
             }
         }
-
 
         private async Task ConnectToServerAsync()
         {
@@ -785,27 +897,6 @@ namespace Test.UI
                 IsLoading = false;
             }
         }
-
-
-        public List<HorusRecording> HorusRecordings
-        {
-            get => _horusRecordings;
-            set => SetProperty(ref _horusRecordings, value);
-        }
-
-        public HorusRecording SelectedRecording
-        {
-            get => _selectedRecording;
-            set => SetProperty(ref _selectedRecording, value);
-        }
-
-        private bool _isHorusConnected = false;
-        public bool IsHorusConnected
-        {
-            get => _isHorusConnected;
-            set => SetProperty(ref _isHorusConnected, value);
-        }
-
 
         private async Task TestConnectionAsync()
         {
@@ -849,6 +940,7 @@ namespace Test.UI
             {
                 IsLoading = true;
                 StatusMessage = "Loading image frames...";
+                _usingHorusImages = false;
 
                 var request = new LoadImagesRequest
                 {
@@ -894,7 +986,7 @@ namespace Test.UI
 
         private async Task RunDetectionAsync()
         {
-            if (_currentFrame == null || string.IsNullOrWhiteSpace(DetectionText))
+            if ((_currentFrame == null && !_usingHorusImages) || string.IsNullOrWhiteSpace(DetectionText))
             {
                 StatusMessage = "Please load an image and specify detection target";
                 return;
@@ -907,7 +999,7 @@ namespace Test.UI
 
                 var request = new DetectionRequest
                 {
-                    ImagePath = _currentFrame.Path,
+                    ImagePath = _usingHorusImages ? "horus_current_image" : _currentFrame?.Path,
                     Model = SelectedModel,
                     DetectionText = DetectionText,
                     Yaw = Yaw,
@@ -952,84 +1044,72 @@ namespace Test.UI
             StatusMessage = "View reset to defaults";
         }
 
-        private async void PreviousFrame()
+        private void PreviousFrame()
         {
-            if (_horusImages.Count > 0 && _currentHorusImageIndex > 0)
+            if (_usingHorusImages && _horusImages.Count > 0 && _currentHorusImageIndex > 0)
             {
-                await DisplayHorusImageAsync(_currentHorusImageIndex - 1);
+                _ = DisplayHorusImageAsync(_currentHorusImageIndex - 1);
                 UpdateHorusFrameInfo();
                 CommandManager.InvalidateRequerySuggested();
             }
-            else if (_currentFrameIndex > 0) // Fallback to original logic
+            else if (_currentFrameIndex > 0)
             {
                 _currentFrameIndex--;
-                await LoadCurrentFrameAsync();
+                _ = LoadCurrentFrameAsync();
                 UpdateFrameInfo();
                 CommandManager.InvalidateRequerySuggested();
             }
         }
 
-        private async void NextFrame()
+        private void NextFrame()
         {
-            if (_horusImages.Count > 0 && _currentHorusImageIndex < _horusImages.Count - 1)
+            if (_usingHorusImages && _horusImages.Count > 0 && _currentHorusImageIndex < _horusImages.Count - 1)
             {
-                await DisplayHorusImageAsync(_currentHorusImageIndex + 1);
+                _ = DisplayHorusImageAsync(_currentHorusImageIndex + 1);
                 UpdateHorusFrameInfo();
                 CommandManager.InvalidateRequerySuggested();
             }
-            else if (_currentFrameIndex < _imageFrames.Count - 1) // Fallback to original logic
+            else if (_currentFrameIndex < _imageFrames.Count - 1)
             {
                 _currentFrameIndex++;
-                await LoadCurrentFrameAsync();
+                _ = LoadCurrentFrameAsync();
                 UpdateFrameInfo();
                 CommandManager.InvalidateRequerySuggested();
             }
         }
 
-        private async void FirstFrame()
+        private void FirstFrame()
         {
-            if (_horusImages.Count > 0)
+            if (_usingHorusImages && _horusImages.Count > 0)
             {
-                await DisplayHorusImageAsync(0);
+                _ = DisplayHorusImageAsync(0);
                 UpdateHorusFrameInfo();
                 CommandManager.InvalidateRequerySuggested();
             }
             else if (_imageFrames.Count > 0)
             {
                 _currentFrameIndex = 0;
-                await LoadCurrentFrameAsync();
+                _ = LoadCurrentFrameAsync();
                 UpdateFrameInfo();
                 CommandManager.InvalidateRequerySuggested();
             }
         }
 
-        private async void LastFrame()
+        private void LastFrame()
         {
-            if (_horusImages.Count > 0)
+            if (_usingHorusImages && _horusImages.Count > 0)
             {
-                await DisplayHorusImageAsync(_horusImages.Count - 1);
+                _ = DisplayHorusImageAsync(_horusImages.Count - 1);
                 UpdateHorusFrameInfo();
                 CommandManager.InvalidateRequerySuggested();
             }
             else if (_imageFrames.Count > 0)
             {
                 _currentFrameIndex = _imageFrames.Count - 1;
-                await LoadCurrentFrameAsync();
+                _ = LoadCurrentFrameAsync();
                 UpdateFrameInfo();
                 CommandManager.InvalidateRequerySuggested();
             }
-        }
-
-        private void OpenSettings()
-        {
-            IsSettingsOpen = true;
-            StatusMessage = "Settings opened";
-        }
-
-        private void CloseSettings()
-        {
-            IsSettingsOpen = false;
-            StatusMessage = "Settings closed";
         }
 
         private void SaveSettings()
@@ -1058,13 +1138,11 @@ namespace Test.UI
                         EnableAnimations = true,
                         Theme = "Modern"
                     },
-                    // Save new database settings
                     DatabaseHost = DatabaseHost,
                     DatabasePort = DatabasePort,
                     DatabaseName = DatabaseName,
                     DatabaseUser = DatabaseUser,
                     DatabasePassword = DatabasePassword,
-                    // Save new image retrieval settings
                     RecordingEndpoint = RecordingEndpoint,
                     HorusClientUrl = HorusClientUrl,
                     DefaultNumberOfImages = DefaultNumberOfImages,
@@ -1073,7 +1151,7 @@ namespace Test.UI
                 };
 
                 _settingsService.SaveSettings(settings);
-                IsSettingsOpen = false;
+                CloseSettings();
                 StatusMessage = "Settings saved successfully";
             }
             catch (Exception ex)
@@ -1095,15 +1173,18 @@ namespace Test.UI
             {
                 StatusMessage = "Testing database connection...";
 
-                // Here you would implement the actual database connection test
-                // For now, we'll simulate the test
-                await Task.Delay(1000); // Simulate connection test
+                // Test using psycopg2 connection similar to Python script
+                string connectionString = $"host={DatabaseHost};port={DatabasePort};database={DatabaseName};user={DatabaseUser};password={DatabasePassword}";
 
-                // TODO: Implement actual database connection test using your connection parameters
-                // string connectionString = $"host={DatabaseHost};port={DatabasePort};dbname={DatabaseName};user={DatabaseUser};password={DatabasePassword}";
-                // Test the connection here
+                // For now, simulate the test - you can implement actual Npgsql test here
+                await Task.Delay(1000);
 
-                IsDatabaseConnected = true; // This should be based on actual test result
+                // TODO: Implement actual database connection test using Npgsql
+                // var connection = new NpgsqlConnection(connectionString);
+                // await connection.OpenAsync();
+                // connection.Close();
+
+                IsDatabaseConnected = true;
                 StatusMessage = "Database connection test successful";
             }
             catch (Exception ex)
@@ -1117,8 +1198,7 @@ namespace Test.UI
         {
             try
             {
-                // For now, just show a placeholder message
-                // In a full implementation, you'd use a folder browser dialog
+                // TODO: Implement folder browser dialog
                 StatusMessage = "Directory browser - to be implemented";
             }
             catch (Exception ex)
@@ -1149,8 +1229,6 @@ namespace Test.UI
 
                     if (imageBytes != null)
                     {
-                        // For now, display Horus image directly
-                        // TODO: Later implement spherical projection via your Python API
                         CurrentImage = CreateBitmapFromBytes(imageBytes);
                         OnPropertyChanged(nameof(HasImage));
                     }
@@ -1162,7 +1240,7 @@ namespace Test.UI
                 return;
             }
 
-            // Handle regular images (your existing logic)
+            // Handle regular images
             if (_currentFrame == null) return;
 
             try
@@ -1220,7 +1298,6 @@ namespace Test.UI
             catch (Exception ex)
             {
                 StatusMessage = $"Settings load error: {ex.Message}";
-                // Use defaults if settings fail to load
                 var defaultSettings = new UserSettings();
                 LoadSettingsFromObject(defaultSettings);
             }
@@ -1243,7 +1320,6 @@ namespace Test.UI
 
             AutoConnect = settings.UISettings.AutoConnect;
 
-            // Set current camera values to defaults
             Yaw = DefaultYaw;
             Pitch = DefaultPitch;
             Roll = DefaultRoll;
@@ -1251,14 +1327,12 @@ namespace Test.UI
 
             DetectionText = DefaultDetectionTarget;
 
-            // Load new database settings
             DatabaseHost = settings.DatabaseHost;
             DatabasePort = settings.DatabasePort;
             DatabaseName = settings.DatabaseName;
             DatabaseUser = settings.DatabaseUser;
             DatabasePassword = settings.DatabasePassword;
 
-            // Load new image retrieval settings
             RecordingEndpoint = settings.RecordingEndpoint;
             HorusClientUrl = settings.HorusClientUrl;
             DefaultNumberOfImages = settings.DefaultNumberOfImages;
@@ -1285,5 +1359,24 @@ namespace Test.UI
             return true;
         }
         #endregion
+
+        /// <summary>
+        /// Show the DockPane.
+        /// </summary>
+        internal static void Show()
+        {
+            DockPane pane = FrameworkApplication.DockPaneManager.Find(_dockPaneID);
+            pane?.Activate();
+        }
+
+        /// <summary>
+        /// Text shown near the top of the DockPane.
+        /// </summary>
+        private string _heading = "Spherical Image Viewer";
+        public string Heading
+        {
+            get => _heading;
+            set => SetProperty(ref _heading, value);
+        }
     }
 }

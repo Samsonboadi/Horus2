@@ -13,6 +13,14 @@ import base64
 import io
 import os
 from typing import List, Dict, Any
+import itertools
+from PIL import Image
+import psycopg2
+
+from horus_media import Client, Size
+from horus_db import Frames, Recordings, Frame, Recording
+from horus_camera import SphericalCamera
+#from Connection_settings import connection_settings, external_data  # From working script
 
 # Configure logging
 logging.basicConfig(
@@ -25,154 +33,202 @@ app = Flask(__name__)
 
 class HorusMediaBridge:
     def __init__(self):
-        self.horus_client = None
+        self.client = None
         self.db_connection = None
         self.is_connected = False
         
-    def connect_horus(self, host: str, port: int, username: str = None, password: str = None) -> bool:
+        # Database credentials from Connection_settings
+        #self.settings = connection_settings(**external_data)
+
+        logger.warning("Using fallback hardcoded credentials")
+        self.db_config = {
+            "host": "10.0.10.100",
+            "port": "5432",
+            "database": "HorusWebMoviePlayer",
+            "user": "pocmsro",
+            "password": "ZSE$%67ujm"
+        }
+
+        # Attempt to connect to Horus and database on initialization
+        self.connect_horus()
+        self.connect_database(
+            host=self.db_config["host"],
+            port=self.db_config["port"],
+            database=self.db_config["database"],
+            user=self.db_config["user"],
+            password=self.db_config["password"]
+        )
+        
+    def get_database_connection_string(self):
+        """Generate database connection string like the working script"""
+        db_params = [
+            ("host", self.db_config["host"]),
+            ("port", self.db_config["port"]),
+            ("dbname", self.db_config["database"]),
+            ("user", self.db_config["user"]),
+            ("password", self.db_config["password"]),
+        ]
+        return " ".join(map("=".join, filter(lambda x: x[1] is not None, db_params)))
+    
+    def connect_horus(self) -> bool:
         """Connect to Horus media server"""
         try:
-            # Import and initialize Horus client
-            # Replace with actual Horus client import
-            import horus_media as horus
-            
-            self.horus_client = horus.Client(
-                host=host,
-                port=port,
-                username=username,
-                password=password
-            )
-            
-            self.is_connected = self.horus_client.connect()
-            logger.info(f"Horus connection: {'SUCCESS' if self.is_connected else 'FAILED'}")
-            
-            return self.is_connected
+            self.client = Client("http://10.0.10.100:5050/web/", timeout=20)
+            self.client.attempts = 5
+            self.is_connected = True
+            logger.info("Horus connection: SUCCESS")
+            return True
             
         except Exception as e:
             logger.error(f"Failed to connect to Horus: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             self.is_connected = False
             return False
     
     def connect_database(self, host: str, port: str, database: str, user: str, password: str) -> bool:
         """Connect to PostgreSQL database"""
         try:
-            import psycopg2
-            
-            self.db_connection = psycopg2.connect(
-                host=host,
-                port=port,
-                database=database,
-                user=user,
-                password=password
-            )
+            self.db_connection = psycopg2.connect(self.get_database_connection_string())
             
             # Test connection
             cursor = self.db_connection.cursor()
             cursor.execute("SELECT 1")
             cursor.close()
             
-            logger.info("Database connection: SUCCESS")
+            logger.info(f"Database connection: SUCCESS (host={host}, port={port}, database={database})")
             return True
             
         except Exception as e:
             logger.error(f"Failed to connect to database: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            self.db_connection = None
             return False
     
     def get_recordings(self) -> List[Dict]:
         """Get list of available recordings"""
         try:
             if self.db_connection:
-                cursor = self.db_connection.cursor()
-                cursor.execute("""
-                    SELECT recording_id, endpoint, name, description, created_date
-                    FROM recordings 
-                    WHERE active = true 
-                    ORDER BY created_date DESC
-                """)
+                recordings_manager = Recordings(self.db_connection)
+                query_results = Recording.query(recordings_manager)
                 
                 recordings = []
-                for row in cursor.fetchall():
+                for recording in query_results:
+                    print(f"Recording: {recording}")  # Debugging
                     recordings.append({
-                        "id": row[0],
-                        "endpoint": row[1],
-                        "name": row[2],
-                        "description": row[3],
-                        "created_date": row[4].isoformat() if row[4] else None
+                        "id": recording.id,
+                        "endpoint": recording.directory,
+                        "boundingbox": str(recording.boundingbox) if recording.boundingbox else None
                     })
                 
-                cursor.close()
                 return recordings
                 
-            elif self.horus_client and self.is_connected:
-                # Fallback to direct Horus client
-                return self.horus_client.get_recordings()
-                
             else:
+                logger.warning("No database connection for retrieving recordings")
                 return []
                 
         except Exception as e:
             logger.error(f"Failed to get recordings: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return []
     
     def get_images(self, recording_endpoint: str, count: int = 5, width: int = 600, height: int = 600) -> List[Dict]:
         """Get images from a recording"""
         try:
-            if not self.horus_client or not self.is_connected:
-                raise Exception("Not connected to Horus server")
+            if not self.client or not self.is_connected or not self.db_connection:
+                raise Exception("Not connected to Horus server or database")
             
-            images = self.horus_client.get_images(
-                recording=recording_endpoint,
-                count=count,
-                width=width,
-                height=height
-            )
+            recordings_manager = Recordings(self.db_connection)
+            recording = next(Recording.query(recordings_manager, directory_like=recording_endpoint), None)
+            if not recording:
+                raise Exception(f"No recording found for endpoint: {recording_endpoint}")
             
-            # Process images for JSON response
+            recordings_manager.get_setup(recording)
+            
+            frames_manager = Frames(self.db_connection)
+            frame_query = Frame.query(frames_manager, recordingid=recording.id, order_by="index")
+            frames_list = list(itertools.islice(frame_query, count))
+            
+            sp_camera = SphericalCamera()
+            sp_camera.set_network_client(self.client)
+            sp_camera.set_horizontal_fov(90)
+            sp_camera.set_yaw(0)
+            sp_camera.set_pitch(-30)
+            
             processed_images = []
-            for i, image_data in enumerate(images):
-                # Convert image to base64 for JSON transport
-                if isinstance(image_data, bytes):
-                    image_b64 = base64.b64encode(image_data).decode('utf-8')
-                    processed_images.append({
-                        "index": i,
-                        "data": image_b64,
-                        "format": "image/jpeg",  # Adjust based on actual format
-                        "timestamp": datetime.now().isoformat()
-                    })
-                elif isinstance(image_data, dict):
-                    # If Horus returns structured data
-                    processed_images.append(image_data)
+            for i, frame in enumerate(frames_list):
+                communication = sp_camera.request(frame, Size(width, height))
+                image = communication.image
+                
+                buffer = io.BytesIO()
+                image.save(buffer, format="JPEG")
+                image_bytes = buffer.getvalue()
+                image_b64 = base64.b64encode(image_bytes).decode('utf-8')
+                
+                processed_images.append({
+                    "index": i,
+                    "data": image_b64,
+                    "format": "image/jpeg",
+                    "timestamp": frame.timestamp.isoformat() if frame.timestamp else None
+                })
             
             return processed_images
             
         except Exception as e:
             logger.error(f"Failed to get images: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             raise
     
     def get_image_by_timestamp(self, recording_endpoint: str, timestamp: str, width: int = 600, height: int = 600) -> Dict:
         """Get specific image by timestamp"""
         try:
-            if not self.horus_client or not self.is_connected:
-                raise Exception("Not connected to Horus server")
+            if not self.client or not self.is_connected or not self.db_connection:
+                raise Exception("Not connected to Horus server or database")
             
-            image_data = self.horus_client.get_image_at_time(
-                recording=recording_endpoint,
-                timestamp=timestamp,
-                width=width,
-                height=height
-            )
+            recordings_manager = Recordings(self.db_connection)
+            recording = next(Recording.query(recordings_manager, directory_like=recording_endpoint), None)
+            if not recording:
+                raise Exception(f"No recording found for endpoint: {recording_endpoint}")
             
-            if isinstance(image_data, bytes):
-                return {
-                    "data": base64.b64encode(image_data).decode('utf-8'),
-                    "format": "image/jpeg",
-                    "timestamp": timestamp
-                }
-            else:
-                return image_data
+            recordings_manager.get_setup(recording)
+            
+            frames_manager = Frames(self.db_connection)
+            frame_query = Frame.query(frames_manager, recordingid=recording.id, order_by="timestamp")
+            selected_frame = None
+            target_time = datetime.fromisoformat(timestamp)
+            min_diff = None
+            for frame in frame_query:
+                if frame.timestamp:
+                    diff = abs(frame.timestamp - target_time)
+                    if min_diff is None or diff < min_diff:
+                        min_diff = diff
+                        selected_frame = frame
+            
+            if not selected_frame:
+                raise Exception(f"No frame found near timestamp: {timestamp}")
+            
+            sp_camera = SphericalCamera()
+            sp_camera.set_network_client(self.client)
+            sp_camera.set_horizontal_fov(90)
+            sp_camera.set_yaw(0)
+            sp_camera.set_pitch(-30)
+            
+            communication = sp_camera.request(selected_frame, Size(width, height))
+            image = communication.image
+            
+            buffer = io.BytesIO()
+            image.save(buffer, format="JPEG")
+            image_bytes = buffer.getvalue()
+            image_b64 = base64.b64encode(image_bytes).decode('utf-8')
+            
+            return {
+                "data": image_b64,
+                "format": "image/jpeg",
+                "timestamp": selected_frame.timestamp.isoformat() if selected_frame.timestamp else None
+            }
                 
         except Exception as e:
             logger.error(f"Failed to get image by timestamp: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             raise
 
 # Global bridge instance
@@ -195,26 +251,26 @@ def connect():
         data = request.json
         
         # Connect to Horus
-        horus_success = False
-        if 'horus' in data:
-            horus_config = data['horus']
-            horus_success = bridge.connect_horus(
-                host=horus_config.get('host', 'localhost'),
-                port=horus_config.get('port', 5050),
-                username=horus_config.get('username'),
-                password=horus_config.get('password')
-            )
+        horus_success = bridge.connect_horus()
         
         # Connect to database
         db_success = False
         if 'database' in data:
             db_config = data['database']
             db_success = bridge.connect_database(
-                host=db_config.get('host'),
-                port=db_config.get('port', '5432'),
-                database=db_config.get('database'),
-                user=db_config.get('user'),
-                password=db_config.get('password')
+                host=db_config.get('host', bridge.db_config['host']),
+                port=db_config.get('port', bridge.db_config['port']),
+                database=db_config.get('database', bridge.db_config['database']),
+                user=db_config.get('user', bridge.db_config['user']),
+                password=db_config.get('password', bridge.db_config['password'])
+            )
+        else:
+            db_success = bridge.connect_database(
+                host=bridge.db_config['host'],
+                port=bridge.db_config['port'],
+                database=bridge.db_config['database'],
+                user=bridge.db_config['user'],
+                password=bridge.db_config['password']
             )
         
         return jsonify({
@@ -226,6 +282,7 @@ def connect():
         
     except Exception as e:
         logger.error(f"Connection failed: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return jsonify({
             "success": False,
             "error": str(e),
@@ -246,6 +303,7 @@ def get_recordings():
         
     except Exception as e:
         logger.error(f"Failed to get recordings: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return jsonify({
             "success": False,
             "error": str(e)
@@ -257,7 +315,7 @@ def get_images():
     try:
         data = request.json
         
-        recording_endpoint = data.get('recording_endpoint', 'Rotterdam360\\\\Ladybug5plus')
+        recording_endpoint = data.get('recording_endpoint', 'Rotterdam360\\Ladybug5plus')
         count = data.get('count', 5)
         width = data.get('width', 600)
         height = data.get('height', 600)
@@ -272,6 +330,7 @@ def get_images():
         
     except Exception as e:
         logger.error(f"Failed to get images: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return jsonify({
             "success": False,
             "error": str(e)
@@ -293,6 +352,7 @@ def get_image_by_timestamp(recording_endpoint: str, timestamp: str):
         
     except Exception as e:
         logger.error(f"Failed to get image by timestamp: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return jsonify({
             "success": False,
             "error": str(e)
@@ -302,9 +362,8 @@ def get_image_by_timestamp(recording_endpoint: str, timestamp: str):
 def disconnect():
     """Disconnect from services"""
     try:
-        if bridge.horus_client:
-            bridge.horus_client.disconnect()
-            bridge.horus_client = None
+        if bridge.client:
+            bridge.client = None
             bridge.is_connected = False
         
         if bridge.db_connection:
@@ -318,6 +377,7 @@ def disconnect():
         
     except Exception as e:
         logger.error(f"Disconnect failed: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return jsonify({
             "success": False,
             "error": str(e)
@@ -337,7 +397,6 @@ if __name__ == '__main__':
     print("  POST /disconnect             - Disconnect from services")
     print("=" * 60)
     
-    # Run the Flask server
     app.run(
         host='localhost',
         port=5001,

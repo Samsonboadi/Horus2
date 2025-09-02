@@ -975,7 +975,7 @@ def get_recordings():
 
 @app.route('/images', methods=['POST'])
 def get_images():
-    """Get images from a recording - FIXED to handle BytesIO return from get_image"""
+    """Get images from a recording - FIXED to use SphericalCamera.acquire"""
     try:
         if not HORUS_AVAILABLE:
             return jsonify({
@@ -1124,6 +1124,9 @@ def get_images():
         
         processed_images = []
         
+        # Debug SphericalCamera methods for clarity
+        logger.info("Available SphericalCamera methods: {}".format([method for method in dir(sp_camera) if not method.startswith('_')]))
+        
         # Process each frame
         for i, t in enumerate(temp):
             try:
@@ -1140,102 +1143,40 @@ def get_images():
                 
                 logger.info(f"Frame location: {frame.get_location() if hasattr(frame, 'get_location') else 'No location method'}")
                 
-                # Set frame and acquire spherical image
-                sp_camera.set_frame(recording, frame)
+                # FIXED: Use acquire to get SphericalImage and get_image to get PIL.Image
+                sp_camera.set_frame(recording, frame)  # Set frame before acquiring
                 spherical_image = sp_camera.acquire(Size(width, height), manual_fetch=False)
                 
                 if spherical_image is None:
                     logger.error(f"Failed to acquire image for frame {i+1}: SphericalImage is None")
                     continue
                 
-                # FIXED: Handle different return types from get_image()
+                # Get the PIL.Image from SphericalImage
                 try:
-                    image_data = spherical_image.get_image()
-                    logger.info(f"get_image() returned type: {type(image_data)}")
-                    
-                    # If get_image() returns BytesIO, use it directly
-                    if isinstance(image_data, io.BytesIO):
-                        logger.info(f"get_image() returned BytesIO, using directly")
-                        image_data.seek(0)  # Make sure we're at the beginning
-                        image_bytes = image_data.getvalue()
-                        
-                        # Convert to base64
-                        image_b64 = base64.b64encode(image_bytes).decode('utf-8')
-                        
-                        processed_images.append({
-                            "Index": i,
-                            "Data": image_b64,
-                            "Format": "image/jpeg",
-                            "Timestamp": frame.timestamp.isoformat() if hasattr(frame, 'timestamp') and frame.timestamp else None
-                        })
-                        
-                        logger.info(f"Successfully processed frame {i+1} (BytesIO direct)")
-                    
-                    # If get_image() returns bytes, use directly
-                    elif isinstance(image_data, bytes):
-                        logger.info(f"get_image() returned bytes, using directly")
-                        image_b64 = base64.b64encode(image_data).decode('utf-8')
-                        
-                        processed_images.append({
-                            "Index": i,
-                            "Data": image_b64,
-                            "Format": "image/jpeg", 
-                            "Timestamp": frame.timestamp.isoformat() if hasattr(frame, 'timestamp') and frame.timestamp else None
-                        })
-                        
-                        logger.info(f"Successfully processed frame {i+1} (bytes direct)")
-                    
-                    # If get_image() returns PIL Image, convert to bytes
-                    elif hasattr(image_data, 'save'):  # PIL Image check
-                        logger.info(f"get_image() returned PIL Image, converting to bytes")
-                        buffer = io.BytesIO()
-                        image_data.save(buffer, format="JPEG", quality=95)
-                        image_bytes = buffer.getvalue()
-                        image_b64 = base64.b64encode(image_bytes).decode('utf-8')
-                        
-                        processed_images.append({
-                            "Index": i,
-                            "Data": image_b64,
-                            "Format": "image/jpeg",
-                            "Timestamp": frame.timestamp.isoformat() if hasattr(frame, 'timestamp') and frame.timestamp else None
-                        })
-                        
-                        logger.info(f"Successfully processed frame {i+1} (PIL Image)")
-                    
-                    # Unknown return type - try to debug
-                    else:
-                        logger.error(f"Unknown return type from get_image(): {type(image_data)}")
-                        logger.error(f"Available methods: {[method for method in dir(image_data) if not method.startswith('_')]}")
-                        
-                        # Try to see if it has image data we can use
-                        if hasattr(image_data, 'getvalue'):
-                            logger.info("Trying getvalue() method")
-                            try:
-                                image_bytes = image_data.getvalue()
-                                image_b64 = base64.b64encode(image_bytes).decode('utf-8')
-                                processed_images.append({
-                                    "Index": i,
-                                    "Data": image_b64,
-                                    "Format": "image/jpeg",
-                                    "Timestamp": frame.timestamp.isoformat() if hasattr(frame, 'timestamp') and frame.timestamp else None
-                                })
-                                logger.info(f"Successfully processed frame {i+1} (via getvalue)")
-                            except Exception as getval_ex:
-                                logger.error(f"getvalue() failed: {getval_ex}")
-                                continue
-                        else:
-                            logger.error(f"Cannot process unknown image data type: {type(image_data)}")
-                            continue
-                
+                    image = spherical_image.get_image()
                 except AttributeError as ae:
                     logger.error(f"Failed to get image from SphericalImage: {ae}")
                     logger.error(f"Available SphericalImage methods: {[method for method in dir(spherical_image) if not method.startswith('_')]}")
+                    raise AttributeError("SphericalImage has no 'get_image' method. Check horus_camera module documentation for correct method.")
+                
+                if image is None:
+                    logger.error(f"Failed to get image for frame {i+1}: PIL.Image is None")
                     continue
                 
-                except Exception as img_ex:
-                    logger.error(f"Error processing image data: {img_ex}")
-                    logger.error(f"Image data type: {type(image_data) if 'image_data' in locals() else 'undefined'}")
-                    continue
+                # Convert to base64 for JSON response
+                buffer = io.BytesIO()
+                image.save(buffer, format="JPEG", quality=95)
+                image_bytes = buffer.getvalue()
+                image_b64 = base64.b64encode(image_bytes).decode('utf-8')
+                
+                processed_images.append({
+                    "Index": i,
+                    "Data": image_b64,
+                    "Format": "image/jpeg",
+                    "Timestamp": frame.timestamp.isoformat() if hasattr(frame, 'timestamp') and frame.timestamp else None
+                })
+                
+                logger.info(f"Successfully processed frame {i+1}")
                 
             except Exception as frame_ex:
                 logger.error(f"Failed to process frame {i+1}: {frame_ex}")

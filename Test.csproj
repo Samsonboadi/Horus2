@@ -9,6 +9,9 @@
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <Deterministic>false</Deterministic>
   </PropertyGroup>
+  <ItemGroup>
+    <None Remove="Scripts\horus_bridge_server - Copy.py" />
+  </ItemGroup>
 
   <!-- Content Files -->
   <ItemGroup>
@@ -17,6 +20,9 @@
     <Content Include="Images\AddInDesktop32.png" />
     <Content Include="DarkImages\AddInDesktop16.png" />
     <Content Include="DarkImages\AddInDesktop32.png" />
+    <Content Include="Scripts\horus_bridge_server - Copy.py">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
   <!-- Launch Settings -->

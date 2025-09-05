@@ -987,7 +987,7 @@ def get_images():
         logger.info(f"Received image request: {data}")
         
         recording_endpoint = data.get('recording_endpoint', 'Rotterdam360\\Ladybug5plus')
-        count = data.get('count', 5) 
+        count = data.get('count', 20) 
         width = data.get('width', 1920)
         height = data.get('height', 1080)
         

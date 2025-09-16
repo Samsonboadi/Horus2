@@ -2,23 +2,23 @@
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
+using System.Linq;
+using System.Net.Http;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media.Imaging;
-using ArcGIS.Desktop.Framework.Contracts;
+using ArcGIS.Core.Geometry;
 using ArcGIS.Desktop.Framework;
+using ArcGIS.Desktop.Framework.Contracts;
 using ArcGIS.Desktop.Framework.Threading.Tasks;
+using Newtonsoft.Json;
 using Test.Models;
 using Test.Services;
-using Test.ViewModels;
-using RelayCommand = Test.ViewModels.RelayCommand;
-using AsyncRelayCommand = Test.ViewModels.AsyncRelayCommand;
-using System.Diagnostics;
-using System.Linq;
-using ArcGIS.Core.Geometry;
 
 namespace Test.UI
 {
@@ -27,54 +27,118 @@ namespace Test.UI
         private const string _dockPaneID = "Test_SphericalViewer_DockPane";
 
         #region Private Fields
-        private readonly PythonApiService _apiService;
+
         private readonly SettingsService _settingsService;
-        private readonly HorusMediaService _horusService;
-        private readonly WfsService _wfsService = new WfsService("https://his-staging.horus.nu");
-        private readonly ArcGISMapService _mapService = new ArcGISMapService();
+        private readonly WfsService _wfsService;
+        private HttpClient _httpClient;
 
-        private readonly PointSelectionState _selectionState = new PointSelectionState();
-
+        // Image Management
         private ImageFrame _currentFrame;
         private List<ImageFrame> _imageFrames = new List<ImageFrame>();
         private int _currentFrameIndex = 0;
-        private bool _isSettingsOpen = false;
-
-        private List<HorusRecording> _horusRecordings = new List<HorusRecording>();
-        private List<HorusImage> _horusImages = new List<HorusImage>();
-        private HorusRecording _selectedRecording;
-        private int _currentHorusImageIndex = 0;
         private bool _usingHorusImages = false;
-        private bool _autoRefreshWfsOnViewChange = true;
-        private bool _clearWfsBeforeLoad = true;
-        private bool _forceWebMercator = true;
-        private System.Threading.CancellationTokenSource _viewChangeDebounceCts;
-        private object _cameraChangedToken;
-        private int _wfsMaxFeatures = 1000;
-        private bool _hasLoadedOnce = false;
-        private int _sectionCount = 32;
-        private int _currentSection = 0;
-        private int _defaultImageScale = 2;
-        private int _preferredSectionIndex = 20;
 
-        // Settings window reference
+        // UI State
+        private bool _isLoading = false;
+        private string _statusMessage = "Ready";
+        private bool _isSettingsOpen = false;
         private Window _settingsWindow;
+
+        // Selection state - simplified
+        private List<WfsFeature> _selectedFeatures = new List<WfsFeature>();
+
         #endregion
 
         #region Properties
-        private string _serverUrl = "http://192.168.6.100:5050";
-        public string ServerUrl
+
+        // === AI Detection API Properties ===
+
+        private string _aiApiBaseUrl = "http://localhost:8000";
+        public string AiApiBaseUrl
         {
-            get => _serverUrl;
-            set => SetProperty(ref _serverUrl, value);
+            get => _aiApiBaseUrl;
+            set => SetProperty(ref _aiApiBaseUrl, value);
         }
 
-        private string _imageDirectory = "/web/images/";
-        public string ImageDirectory
+        private string _detectionText = "pole";
+        public string DetectionText
         {
-            get => _imageDirectory;
-            set => SetProperty(ref _imageDirectory, value);
+            get => _detectionText;
+            set => SetProperty(ref _detectionText, value);
         }
+
+        private ObservableCollection<DetectionResult> _detectionResults;
+        public ObservableCollection<DetectionResult> DetectionResults
+        {
+            get => _detectionResults ?? (_detectionResults = new ObservableCollection<DetectionResult>());
+            set => SetProperty(ref _detectionResults, value);
+        }
+
+        // === Camera Parameters ===
+
+        private double _yaw = 0.0;
+        public double Yaw
+        {
+            get => _yaw;
+            set => SetProperty(ref _yaw, value);
+        }
+
+        private double _pitch = -20.0;
+        public double Pitch
+        {
+            get => _pitch;
+            set => SetProperty(ref _pitch, value);
+        }
+
+        private double _roll = 0.0;
+        public double Roll
+        {
+            get => _roll;
+            set => SetProperty(ref _roll, value);
+        }
+
+        private double _fov = 110.0;
+        public double Fov
+        {
+            get => _fov;
+            set => SetProperty(ref _fov, value);
+        }
+
+        private double _defaultConfidenceThreshold = 0.22;
+        public double DefaultConfidenceThreshold
+        {
+            get => _defaultConfidenceThreshold;
+            set => SetProperty(ref _defaultConfidenceThreshold, value);
+        }
+
+        private double _defaultIoUThreshold = 0.5;
+        public double DefaultIoUThreshold
+        {
+            get => _defaultIoUThreshold;
+            set => SetProperty(ref _defaultIoUThreshold, value);
+        }
+
+        // === UI State Properties ===
+
+        public bool IsLoading
+        {
+            get => _isLoading;
+            set => SetProperty(ref _isLoading, value);
+        }
+
+        public string StatusMessage
+        {
+            get => _statusMessage;
+            set => SetProperty(ref _statusMessage, value);
+        }
+
+        public bool IsSettingsOpen
+        {
+            get => _isSettingsOpen;
+            set => SetProperty(ref _isSettingsOpen, value);
+        }
+
+        // === Image Properties ===
 
         private BitmapSource _currentImage;
         public BitmapSource CurrentImage
@@ -91,7 +155,38 @@ namespace Test.UI
 
         public bool HasImage => CurrentImage != null;
 
-        // WFS / Selection state
+        private bool _canNavigateFrames = false;
+        public bool CanNavigateFrames
+        {
+            get => _canNavigateFrames;
+            set => SetProperty(ref _canNavigateFrames, value);
+        }
+
+        private string _frameInfo = "Frame: 0/0";
+        public string FrameInfo
+        {
+            get => _frameInfo;
+            set => SetProperty(ref _frameInfo, value);
+        }
+
+        // === Settings Properties ===
+
+        private string _serverUrl = "http://192.168.6.100:5050";
+        public string ServerUrl
+        {
+            get => _serverUrl;
+            set => SetProperty(ref _serverUrl, value);
+        }
+
+        private string _imageDirectory = "/web/images/";
+        public string ImageDirectory
+        {
+            get => _imageDirectory;
+            set => SetProperty(ref _imageDirectory, value);
+        }
+
+        // === WFS Properties ===
+
         private bool _isMultiSelectMode = false;
         public bool IsMultiSelectMode
         {
@@ -100,7 +195,6 @@ namespace Test.UI
             {
                 if (SetProperty(ref _isMultiSelectMode, value))
                 {
-                    _selectionState.IsMultiSelectMode = value;
                     OnPropertyChanged(nameof(SelectionInfo));
                 }
             }
@@ -117,1217 +211,108 @@ namespace Test.UI
         {
             get
             {
-                return _selectionState.HasSelection
-                    ? $"Selected: {_selectionState.SelectionCount}"
-                    : "Selected: 0";
+                return _selectedFeatures?.Count > 0
+                    ? $"Selected: {_selectedFeatures.Count} feature(s)"
+                    : "No selection";
             }
         }
 
-        private double _yaw = 0.0;
-        public double Yaw
-        {
-            get => _yaw;
-            set
-            {
-                if (SetProperty(ref _yaw, value))
-                {
-                    OnPropertyChanged(nameof(YawAngle));
-                    QueuedTask.Run(async () => await UpdateImageViewAsync());
-                }
-            }
-        }
-
-        public double YawAngle => (_yaw + 180) * 2;
-
-        private double _pitch = -20.0;
-        public double Pitch
-        {
-            get => _pitch;
-            set
-            {
-                if (SetProperty(ref _pitch, value))
-                {
-                    OnPropertyChanged(nameof(PitchAngle));
-                    QueuedTask.Run(async () => await UpdateImageViewAsync());
-                }
-            }
-        }
-
-        public double PitchAngle => (_pitch + 90) * 2;
-
-        private double _roll = 0.0;
-        public double Roll
-        {
-            get => _roll;
-            set
-            {
-                if (SetProperty(ref _roll, value))
-                {
-                    OnPropertyChanged(nameof(RollAngle));
-                    QueuedTask.Run(async () => await UpdateImageViewAsync());
-                }
-            }
-        }
-
-        public double RollAngle => (_roll + 180) * 2;
-
-        private double _fov = 110.0;
-        public double Fov
-        {
-            get => _fov;
-            set
-            {
-                if (SetProperty(ref _fov, value))
-                {
-                    OnPropertyChanged(nameof(FovAngle));
-                    QueuedTask.Run(async () => await UpdateImageViewAsync());
-                }
-            }
-        }
-
-        public double FovAngle => ((_fov - 30) / 150) * 360;
-
-        private string _detectionText = "pole";
-        public string DetectionText
-        {
-            get => _detectionText;
-            set => SetProperty(ref _detectionText, value);
-        }
-
-        private string _statusMessage = "Spherical Image Viewer loaded successfully!";
-        public string StatusMessage
-        {
-            get => _statusMessage;
-            set => SetProperty(ref _statusMessage, value);
-        }
-
-        private bool _isConnected = false;
-        public bool IsConnected
-        {
-            get => _isConnected;
-            set => SetProperty(ref _isConnected, value);
-        }
-
-        private bool _isLoading = false;
-        public bool IsLoading
-        {
-            get => _isLoading;
-            set => SetProperty(ref _isLoading, value);
-        }
-
-        public ObservableCollection<string> AvailableModels { get; private set; }
-
-        private string _selectedModel = "GroundingLangSAM";
-        public string SelectedModel
-        {
-            get => _selectedModel;
-            set => SetProperty(ref _selectedModel, value);
-        }
-
-        private string _frameInfo = "Frame: 0/0";
-        public string FrameInfo
-        {
-            get => _frameInfo;
-            set => SetProperty(ref _frameInfo, value);
-        }
-
-        private bool _canNavigateFrames = false;
-        public bool CanNavigateFrames
-        {
-            get => _canNavigateFrames;
-            set => SetProperty(ref _canNavigateFrames, value);
-        }
-
-        private ObservableCollection<DetectionResult> _detectionResults;
-        public ObservableCollection<DetectionResult> DetectionResults
-        {
-            get => _detectionResults;
-            private set => SetProperty(ref _detectionResults, value);
-        }
-
-        // Settings Properties
-        private bool _autoConnect = false;
-        public bool AutoConnect
-        {
-            get => _autoConnect;
-            set => SetProperty(ref _autoConnect, value);
-        }
-
-        private int _connectionTimeout = 30;
-        public int ConnectionTimeout
-        {
-            get => _connectionTimeout;
-            set => SetProperty(ref _connectionTimeout, value);
-        }
-
-        private string _defaultImageDirectory = "/web/images/";
-        public string DefaultImageDirectory
-        {
-            get => _defaultImageDirectory;
-            set => SetProperty(ref _defaultImageDirectory, value);
-        }
-
-        private string _supportedFormats = "*.jpg,*.png,*.jpeg,*.tiff";
-        public string SupportedFormats
-        {
-            get => _supportedFormats;
-            set => SetProperty(ref _supportedFormats, value);
-        }
-
-        private int _maxImagesToLoad = 1000;
-        public int MaxImagesToLoad
-        {
-            get => _maxImagesToLoad;
-            set => SetProperty(ref _maxImagesToLoad, value);
-        }
-
-        private bool _includeSubdirectories = true;
-        public bool IncludeSubdirectories
-        {
-            get => _includeSubdirectories;
-            set => SetProperty(ref _includeSubdirectories, value);
-        }
-
-        private double _defaultYaw = 0.0;
-        public double DefaultYaw
-        {
-            get => _defaultYaw;
-            set => SetProperty(ref _defaultYaw, value);
-        }
-
-        private double _defaultPitch = -20.0;
-        public double DefaultPitch
-        {
-            get => _defaultPitch;
-            set => SetProperty(ref _defaultPitch, value);
-        }
-
-        private double _defaultRoll = 0.0;
-        public double DefaultRoll
-        {
-            get => _defaultRoll;
-            set => SetProperty(ref _defaultRoll, value);
-        }
-
-        private double _defaultFov = 110.0;
-        public double DefaultFov
-        {
-            get => _defaultFov;
-            set => SetProperty(ref _defaultFov, value);
-        }
-
-        private string _defaultModel = "GroundingLangSAM";
-        public string DefaultModel
-        {
-            get => _defaultModel;
-            set => SetProperty(ref _defaultModel, value);
-        }
-
-        private double _defaultConfidenceThreshold = 0.3;
-        public double DefaultConfidenceThreshold
-        {
-            get => _defaultConfidenceThreshold;
-            set => SetProperty(ref _defaultConfidenceThreshold, value);
-        }
-
-        private double _defaultIoUThreshold = 0.5;
-        public double DefaultIoUThreshold
-        {
-            get => _defaultIoUThreshold;
-            set => SetProperty(ref _defaultIoUThreshold, value);
-        }
-
-        private string _defaultDetectionTarget = "pole";
-        public string DefaultDetectionTarget
-        {
-            get => _defaultDetectionTarget;
-            set => SetProperty(ref _defaultDetectionTarget, value);
-        }
-
-        // Database Connection Properties
-        private string _databaseHost = "";
-        public string DatabaseHost
-        {
-            get => _databaseHost;
-            set => SetProperty(ref _databaseHost, value);
-        }
-
-        private string _databasePort = "5432";
-        public string DatabasePort
-        {
-            get => _databasePort;
-            set => SetProperty(ref _databasePort, value);
-        }
-
-        private string _databaseName = "HorusWebMoviePlayer";
-        public string DatabaseName
-        {
-            get => _databaseName;
-            set => SetProperty(ref _databaseName, value);
-        }
-
-        private string _databaseUser = "";
-        public string DatabaseUser
-        {
-            get => _databaseUser;
-            set => SetProperty(ref _databaseUser, value);
-        }
-
-        private string _databasePassword = "";
-        public string DatabasePassword
-        {
-            get => _databasePassword;
-            set => SetProperty(ref _databasePassword, value);
-        }
-
-        private bool _isDatabaseConnected = false;
-        public bool IsDatabaseConnected
-        {
-            get => _isDatabaseConnected;
-            set => SetProperty(ref _isDatabaseConnected, value);
-        }
-
-        // Image Retrieval Properties
-        private string _recordingEndpoint = "Rotterdam360\\\\Ladybug5plus";
-        public string RecordingEndpoint
-        {
-            get => _recordingEndpoint;
-            set => SetProperty(ref _recordingEndpoint, value);
-        }
-
-        private string _horusClientUrl = "http://10.0.10.100:5050/web/";
-        public string HorusClientUrl
-        {
-            get => _horusClientUrl;
-            set => SetProperty(ref _horusClientUrl, value);
-        }
-
-        private int _defaultNumberOfImages = 5;
-        public int DefaultNumberOfImages
-        {
-            get => _defaultNumberOfImages;
-            set => SetProperty(ref _defaultNumberOfImages, value);
-        }
-
-        private int _defaultImageWidth = 600;
-        public int DefaultImageWidth
-        {
-            get => _defaultImageWidth;
-            set => SetProperty(ref _defaultImageWidth, value);
-        }
-
-        private int _defaultImageHeight = 600;
-        public int DefaultImageHeight
-        {
-            get => _defaultImageHeight;
-            set => SetProperty(ref _defaultImageHeight, value);
-        }
-
-        public bool IsSettingsOpen
-        {
-            get => _isSettingsOpen;
-            set => SetProperty(ref _isSettingsOpen, value);
-        }
-
-        // WFS & Map preferences
-        public bool AutoRefreshWfsOnViewChange
-        {
-            get => _autoRefreshWfsOnViewChange;
-            set
-            {
-                if (SetProperty(ref _autoRefreshWfsOnViewChange, value))
-                {
-                    SetupMapAutoRefreshSubscription();
-                }
-            }
-        }
-
-        public bool ClearWfsBeforeLoad
-        {
-            get => _clearWfsBeforeLoad;
-            set => SetProperty(ref _clearWfsBeforeLoad, value);
-        }
-
-        public bool ForceWebMercator
-        {
-            get => _forceWebMercator;
-            set
-            {
-                if (SetProperty(ref _forceWebMercator, value))
-                {
-                    _mapService.ForceWebMercator = value;
-                    _ = _mapService.InitializeAsync();
-                }
-            }
-        }
-
+        private int _wfsMaxFeatures = 100;
         public int WfsMaxFeatures
         {
             get => _wfsMaxFeatures;
-            set => SetProperty(ref _wfsMaxFeatures, Math.Max(1, value));
+            set => SetProperty(ref _wfsMaxFeatures, value);
         }
 
-        private bool _requireMinZoomForWfs = true;
-        public bool RequireMinZoomForWfs
-        {
-            get => _requireMinZoomForWfs;
-            set => SetProperty(ref _requireMinZoomForWfs, value);
-        }
-
-        private double _minWfsViewWidthDegrees = 0.5;
-        public double MinWfsViewWidthDegrees
-        {
-            get => _minWfsViewWidthDegrees;
-            set => SetProperty(ref _minWfsViewWidthDegrees, Math.Max(0.01, value));
-        }
-
-        public int SectionCount
-        {
-            get => _sectionCount;
-            set => SetProperty(ref _sectionCount, Math.Max(1, value));
-        }
-
-        public int CurrentSection
-        {
-            get => _currentSection;
-            set
-            {
-                var normalized = value;
-                if (_sectionCount > 0)
-                {
-                    normalized = ((value % _sectionCount) + _sectionCount) % _sectionCount;
-                }
-                if (SetProperty(ref _currentSection, normalized))
-                {
-                    if (_selectionState.HasSelection && _selectionState.CurrentFeature != null && !_usingHorusImages && _currentFrame == null)
-                    {
-                        var feat = _selectionState.CurrentFeature;
-                        _ = DisplayFeatureImageAsync(feat, preferCameraParams: false);
-                        _ = PrefetchAdjacentSectionsAsync(feat);
-                    }
-                }
-            }
-        }
-
-        public int DefaultImageScale
-        {
-            get => _defaultImageScale;
-            set => SetProperty(ref _defaultImageScale, Math.Max(1, value));
-        }
-
-        public int PreferredSectionIndex
-        {
-            get => _preferredSectionIndex;
-            set => SetProperty(ref _preferredSectionIndex, Math.Max(0, value));
-        }
-
-        public List<HorusRecording> HorusRecordings
-        {
-            get => _horusRecordings;
-            set => SetProperty(ref _horusRecordings, value);
-        }
-
-        public HorusRecording SelectedRecording
-        {
-            get => _selectedRecording;
-            set
-            {
-                if (SetProperty(ref _selectedRecording, value))
-                {
-                    // Auto-refresh WFS when recording selection changes
-                    if (!IsLoading)
-                    {
-                        _ = LoadWfsPointsAsync();
-                    }
-                }
-            }
-        }
-
-        private bool _isHorusConnected = false;
-        public bool IsHorusConnected
-        {
-            get => _isHorusConnected;
-            set => SetProperty(ref _isHorusConnected, value);
-        }
-
-        private string _heading = "Spherical Image Viewer";
-        public string Heading
-        {
-            get => _heading;
-            set => SetProperty(ref _heading, value);
-        }
         #endregion
 
         #region Commands
-        public ICommand ConnectCommand { get; private set; }
-        public ICommand DisconnectCommand { get; private set; }
+
         public ICommand LoadImagesCommand { get; private set; }
-        public ICommand RefreshCommand { get; private set; }
-        public ICommand RunDetectionCommand { get; private set; }
-        public ICommand ResetViewCommand { get; private set; }
+        public ICommand LoadHorusImagesCommand { get; private set; }
         public ICommand PreviousFrameCommand { get; private set; }
         public ICommand NextFrameCommand { get; private set; }
-        public ICommand FirstFrameCommand { get; private set; }
-        public ICommand LastFrameCommand { get; private set; }
+        public ICommand RunDetectionCommand { get; private set; }
+        public ICommand RunDetectionOnSelectionCommand { get; private set; }
+        public ICommand ClearResultsCommand { get; private set; }
+        public ICommand ResetViewCommand { get; private set; }
         public ICommand OpenSettingsCommand { get; private set; }
         public ICommand CloseSettingsCommand { get; private set; }
-        public ICommand SaveSettingsCommand { get; private set; }
-        public ICommand ResetSettingsCommand { get; private set; }
-        public ICommand TestConnectionCommand { get; private set; }
-        public ICommand TestDatabaseConnectionCommand { get; private set; }
-        public ICommand BrowseDirectoryCommand { get; private set; }
-
-        public ICommand ConnectHorusCommand { get; private set; }
-        public ICommand DisconnectHorusCommand { get; private set; }
-        public ICommand LoadHorusRecordingsCommand { get; private set; }
-        public ICommand LoadHorusImagesCommand { get; private set; }
-        public ICommand StartPythonBridgeCommand { get; private set; }
-        public ICommand TestHorusConnectionCommand { get; private set; }
-        // WFS & Selection commands
         public ICommand LoadWfsPointsCommand { get; private set; }
-        public ICommand ClearWfsPointsCommand { get; private set; }
-        public ICommand ActivateSelectToolCommand { get; private set; }
-        public ICommand NextSelectedCommand { get; private set; }
-        public ICommand PreviousSelectedCommand { get; private set; }
-        public ICommand RunDetectionOnSelectionCommand { get; private set; }
+        public ICommand ClearSelectionCommand { get; private set; }
+
         #endregion
 
-        #region Constructor and Initialization
-        public SphericalViewerViewModel()
+        #region Constructor
+
+        protected SphericalViewerViewModel()
         {
-            try
-            {
-                // Initialize collections first
-                AvailableModels = new ObservableCollection<string>
-                {
-                    "GroundingLangSAM",
-                    "GroundingDino",
-                    "YoloWorld",
-                    "SAM_V2",
-                    "Florence2"
-                };
+            // Initialize services
+            _settingsService = new SettingsService();
+            _wfsService = new WfsService("https://his-staging.horus.nu");
 
-                DetectionResults = new ObservableCollection<DetectionResult>();
+            // Initialize HTTP client for AI API
+            _httpClient = new HttpClient();
+            _httpClient.Timeout = TimeSpan.FromMinutes(5);
 
-                // Initialize services - don't dispose these until module unload
-                _apiService = new PythonApiService();
-                _settingsService = new SettingsService();
-                _horusService = new HorusMediaService();
+            InitializeCommands();
+            LoadSettings();
 
-                // Load settings before initializing commands
-                LoadSettings();
-                InitializeCommands();
-
-                StatusMessage = "Spherical Image Viewer initialized successfully";
-
-                // Auto-connect in background to avoid blocking UI
-                if (AutoConnect)
-                {
-                    Task.Run(async () =>
-                    {
-                        try
-                        {
-                            await ConnectToServerAsync();
-                        }
-                        catch (Exception ex)
-                        {
-                            Application.Current.Dispatcher.Invoke(() =>
-                            {
-                                StatusMessage = $"Auto-connect failed: {ex.Message}";
-                            });
-                        }
-                    });
-                }
-            }
-            catch (Exception ex)
-            {
-                StatusMessage = $"Initialization error: {ex.Message}";
-                Debug.WriteLine($"SphericalViewerViewModel initialization failed: {ex}");
-            }
+            UpdateStatusMessage("Spherical Viewer initialized - AI Detection API ready");
         }
 
-        protected override Task InitializeAsync()
-        {
-            try
-            {
-                StatusMessage = "Dock pane initialized and ready";
-                // Initialize map service for WFS layers
-                _mapService.ForceWebMercator = ForceWebMercator;
-                _ = _mapService.InitializeAsync();
-                SetupMapAutoRefreshSubscription();
-                return Task.CompletedTask;
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"InitializeAsync error: {ex}");
-                return Task.FromException(ex);
-            }
-        }
+        #endregion
+
+        #region Initialization
 
         private void InitializeCommands()
         {
-            try
-            {
-                // Use AsyncRelayCommand for async operations
-                ConnectCommand = new AsyncRelayCommand(ConnectToServerAsync, () => !IsLoading);
-                LoadImagesCommand = new AsyncRelayCommand(LoadImagesAsync, () => IsConnected && !IsLoading);
-                RunDetectionCommand = new AsyncRelayCommand(RunDetectionAsync, () => HasImage && !IsLoading);
-                TestConnectionCommand = new AsyncRelayCommand(TestConnectionAsync, () => !IsLoading);
-                TestDatabaseConnectionCommand = new AsyncRelayCommand(TestDatabaseConnectionAsync, () => !IsLoading);
-                ConnectHorusCommand = new AsyncRelayCommand(ConnectToHorusAsync, () => !IsLoading && !IsHorusConnected);
-                DisconnectHorusCommand = new AsyncRelayCommand(DisconnectFromHorusAsync, () => IsHorusConnected);
-                LoadHorusRecordingsCommand = new AsyncRelayCommand(LoadHorusRecordingsAsync, () => IsHorusConnected && !IsLoading);
-                LoadHorusImagesCommand = new AsyncRelayCommand(LoadHorusImagesAsync, () => IsHorusConnected && SelectedRecording != null && !IsLoading);
-                StartPythonBridgeCommand = new AsyncRelayCommand(StartPythonBridgeAsync, () => !IsLoading);
-                TestHorusConnectionCommand = new AsyncRelayCommand(TestHorusConnectionAsync, () => !IsLoading);
-
-                // Synchronous commands with proper error handling
-                DisconnectCommand = new RelayCommand(() => SafeExecute(DisconnectFromServer), () => IsConnected);
-                RefreshCommand = new RelayCommand(() => SafeExecute(RefreshView), () => HasImage);
-                ResetViewCommand = new RelayCommand(() => SafeExecute(ResetView), () => HasImage);
-                PreviousFrameCommand = new RelayCommand(() => SafeExecute(PreviousFrame), () => CanNavigateFrames && (_currentFrameIndex > 0 || _currentHorusImageIndex > 0));
-                NextFrameCommand = new RelayCommand(() => SafeExecute(NextFrame), () => CanNavigateFrames && ((_usingHorusImages && _currentHorusImageIndex < _horusImages.Count - 1) || (!_usingHorusImages && _currentFrameIndex < _imageFrames.Count - 1)));
-                FirstFrameCommand = new RelayCommand(() => SafeExecute(FirstFrame), () => CanNavigateFrames && (_currentFrameIndex > 0 || _currentHorusImageIndex > 0));
-                LastFrameCommand = new RelayCommand(() => SafeExecute(LastFrame), () => CanNavigateFrames && ((_usingHorusImages && _currentHorusImageIndex < _horusImages.Count - 1) || (!_usingHorusImages && _currentFrameIndex < _imageFrames.Count - 1)));
-
-                OpenSettingsCommand = new RelayCommand(() => SafeExecute(OpenSettings), () => true);
-                CloseSettingsCommand = new RelayCommand(() => SafeExecute(CloseSettings), () => true);
-                SaveSettingsCommand = new RelayCommand(() => SafeExecute(SaveSettings), () => true);
-                ResetSettingsCommand = new RelayCommand(() => SafeExecute(ResetSettings), () => true);
-                BrowseDirectoryCommand = new RelayCommand(() => SafeExecute(BrowseDirectory), () => true);
-
-                // WFS & selection commands
-                LoadWfsPointsCommand = new AsyncRelayCommand(LoadWfsPointsAsync, () => !IsLoading);
-                ClearWfsPointsCommand = new AsyncRelayCommand(ClearWfsPointsAsync, () => !IsLoading);
-                ActivateSelectToolCommand = new AsyncRelayCommand(ActivateSelectToolAsync, () => true);
-                NextSelectedCommand = new RelayCommand(() => SafeExecute(NextSelected), () => _selectionState.HasMultipleSelections);
-                PreviousSelectedCommand = new RelayCommand(() => SafeExecute(PreviousSelected), () => _selectionState.HasMultipleSelections);
-                RunDetectionOnSelectionCommand = new AsyncRelayCommand(RunDetectionOnSelectionAsync, () => _selectionState.HasSelection && !IsLoading);
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Command initialization failed: {ex}");
-                StatusMessage = $"Command initialization error: {ex.Message}";
-            }
+            LoadImagesCommand = new ArcGIS.Desktop.Framework.RelayCommand(async () => await LoadImagesAsync(), () => !IsLoading);
+            LoadHorusImagesCommand = new ArcGIS.Desktop.Framework.RelayCommand(async () => await LoadHorusImagesAsync(), () => !IsLoading);
+            PreviousFrameCommand = new ArcGIS.Desktop.Framework.RelayCommand(async () => await PreviousFrameAsync(), () => CanNavigateFrames);
+            NextFrameCommand = new ArcGIS.Desktop.Framework.RelayCommand(async () => await NextFrameAsync(), () => CanNavigateFrames);
+            RunDetectionCommand = new ArcGIS.Desktop.Framework.RelayCommand(async () => await RunDetectionAsync(), () => HasImage && !IsLoading);
+            RunDetectionOnSelectionCommand = new ArcGIS.Desktop.Framework.RelayCommand(async () => await RunDetectionOnSelectionAsync(), () => _selectedFeatures?.Count > 0 && !IsLoading);
+            ClearResultsCommand = new ArcGIS.Desktop.Framework.RelayCommand(() => ClearResults(), () => DetectionResults.Any());
+            ResetViewCommand = new ArcGIS.Desktop.Framework.RelayCommand(() => ResetView());
+            OpenSettingsCommand = new ArcGIS.Desktop.Framework.RelayCommand(() => OpenSettings());
+            CloseSettingsCommand = new ArcGIS.Desktop.Framework.RelayCommand(() => CloseSettings());
+            LoadWfsPointsCommand = new ArcGIS.Desktop.Framework.RelayCommand(async () => await LoadWfsPointsAsync(), () => !IsLoading);
+            ClearSelectionCommand = new ArcGIS.Desktop.Framework.RelayCommand(() => ClearSelection(), () => _selectedFeatures?.Count > 0);
         }
 
-        private void SafeExecute(Action action)
-        {
-            try
-            {
-                action?.Invoke();
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Command execution error: {ex}");
-                StatusMessage = $"Operation failed: {ex.Message}";
-            }
-        }
         #endregion
 
-        #region Command Methods
-        private void OpenSettings()
-        {
-            try
-            {
-                if (!Application.Current.Dispatcher.CheckAccess())
-                {
-                    Application.Current.Dispatcher.Invoke(() => OpenSettings());
-                    return;
-                }
-
-                if (_settingsWindow != null && _settingsWindow.IsLoaded)
-                {
-                    _settingsWindow.Activate();
-                    _settingsWindow.Focus();
-                    return;
-                }
-
-                var settingsView = new SettingsView();
-
-                _settingsWindow = new Window
-                {
-                    Title = "Spherical Image Viewer - Settings",
-                    Content = settingsView,
-                    Width = 650,
-                    Height = 750,
-                    WindowStartupLocation = WindowStartupLocation.CenterScreen,
-                    ResizeMode = ResizeMode.CanResize,
-                    ShowInTaskbar = false,
-                    WindowStyle = WindowStyle.ToolWindow
-                };
-
-                settingsView.DataContext = this;
-
-                _settingsWindow.Closed += (s, e) =>
-                {
-                    try
-                    {
-                        _settingsWindow = null;
-                        IsSettingsOpen = false;
-                        StatusMessage = "Settings window closed";
-                    }
-                    catch (Exception ex)
-                    {
-                        Debug.WriteLine($"Settings window cleanup error: {ex}");
-                    }
-                };
-
-                IsSettingsOpen = true;
-                _settingsWindow.Show();
-                StatusMessage = "Settings window opened";
-            }
-            catch (Exception ex)
-            {
-                StatusMessage = $"Failed to open settings: {ex.Message}";
-                Debug.WriteLine($"Settings window error: {ex}");
-                IsSettingsOpen = false;
-                _settingsWindow = null;
-            }
-        }
-
-        private void CloseSettings()
-        {
-            try
-            {
-                if (Application.Current.Dispatcher.CheckAccess())
-                {
-                    _settingsWindow?.Close();
-                }
-                else
-                {
-                    Application.Current.Dispatcher.Invoke(() => _settingsWindow?.Close());
-                }
-
-                IsSettingsOpen = false;
-                StatusMessage = "Settings window closed";
-            }
-            catch (Exception ex)
-            {
-                StatusMessage = $"Error closing settings: {ex.Message}";
-                Debug.WriteLine($"Close settings error: {ex}");
-            }
-        }
-
-        private async Task StartPythonBridgeAsync()
-        {
-            try
-            {
-                UpdateStatusMessage("Starting Python bridge server...");
-                IsLoading = true;
-
-                var bridgeConfig = new
-                {
-                    database = new
-                    {
-                        host = DatabaseHost,
-                        port = DatabasePort,
-                        database = DatabaseName,
-                        user = DatabaseUser,
-                        password = DatabasePassword
-                    },
-                    horus = new
-                    {
-                        url = HorusClientUrl
-                    }
-                };
-
-                string configPath = Path.Combine(Path.GetTempPath(), "horus_bridge_config.json");
-                string configJson = Newtonsoft.Json.JsonConvert.SerializeObject(bridgeConfig, Newtonsoft.Json.Formatting.Indented);
-                File.WriteAllText(configPath, configJson);
-
-                string addinPath = AppDomain.CurrentDomain.BaseDirectory;
-                string scriptPath = Path.Combine(addinPath, "Scripts", "horus_bridge_server.py");
-
-                if (!File.Exists(scriptPath))
-                {
-                    scriptPath = Path.Combine(Environment.CurrentDirectory, "Scripts", "horus_bridge_server.py");
-                }
-
-                if (!File.Exists(scriptPath))
-                {
-                    var assemblyPath = System.Reflection.Assembly.GetExecutingAssembly().Location;
-                    var assemblyDir = Path.GetDirectoryName(assemblyPath);
-                    scriptPath = Path.Combine(assemblyDir, "Scripts", "horus_bridge_server.py");
-                }
-
-                if (!File.Exists(scriptPath))
-                {
-                    UpdateStatusMessage($"Python script not found. Expected location: {scriptPath}");
-                    return;
-                }
-
-                string pythonExe = @"C:\Program Files\ArcGIS\Pro\bin\Python\envs\arcgispro-py3\python.exe";
-
-                if (!File.Exists(pythonExe))
-                {
-                    UpdateStatusMessage("ArcGIS Pro Python not found. Please check installation.");
-                    return;
-                }
-
-                var startInfo = new ProcessStartInfo
-                {
-                    FileName = pythonExe,
-                    Arguments = $"\"{scriptPath}\" --config \"{configPath}\" --port 5001 --host localhost",
-                    UseShellExecute = false,
-                    CreateNoWindow = false,
-                    RedirectStandardOutput = false,
-                    RedirectStandardError = false,
-                    WorkingDirectory = Path.GetDirectoryName(scriptPath)
-                };
-
-                UpdateStatusMessage("Launching Python bridge server...");
-                var process = Process.Start(startInfo);
-
-                if (process == null)
-                {
-                    UpdateStatusMessage("Failed to start Python bridge process");
-                    return;
-                }
-
-                UpdateStatusMessage("Waiting for Python bridge to initialize...");
-
-                // Give the server more time to start up properly
-                await Task.Delay(8000);  // Increased from 5000ms to 8000ms
-
-                UpdateStatusMessage("Testing bridge connection...");
-
-                // Create a fresh HorusMediaService instance for testing to avoid disposal issues
-                using (var testService = new HorusMediaService())
-                {
-                    var healthCheck = await testService.CheckHealthAsync();
-
-                    if (healthCheck.Success)
-                    {
-                        UpdateStatusMessage($"Python bridge server started successfully! Status: {healthCheck.Message}");
-
-                        // Update the bridge URL for the main service
-                        _horusService.UpdateBridgeUrl("http://localhost:5001");
-
-                        // Only auto-connect if we have database credentials
-                        if (!string.IsNullOrWhiteSpace(DatabaseHost) && !string.IsNullOrWhiteSpace(DatabaseUser))
-                        {
-                            UpdateStatusMessage("Auto-connecting to Horus services...");
-                            await Task.Delay(2000); // Give bridge a moment to settle
-                            await ConnectToHorusAsync();
-                        }
-                        else
-                        {
-                            UpdateStatusMessage("Bridge ready. Configure database settings and click 'Connect Horus' to connect.");
-                        }
-                    }
-                    else
-                    {
-                        UpdateStatusMessage($"Python bridge health check failed: {healthCheck.Error}");
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                UpdateStatusMessage($"Failed to start Python bridge: {ex.Message}");
-                Debug.WriteLine($"Python bridge error: {ex}");
-            }
-            finally
-            {
-                IsLoading = false;
-            }
-        }
-
-        private async Task TestHorusConnectionAsync()
-        {
-            try
-            {
-                UpdateStatusMessage("Testing Horus connection...");
-
-                // Use the dedicated tester to avoid disposal issues
-                var (success, message, details) = await BridgeConnectionTester.TestBridgeHealthAsync("http://localhost:5001");
-
-                if (success)
-                {
-                    UpdateStatusMessage($"Bridge test successful: {details}");
-
-                    // Parse the details to get connection status
-                    IsHorusConnected = details.Contains("Horus: Connected");
-                }
-                else
-                {
-                    UpdateStatusMessage($"Bridge test failed: {message} - {details}");
-                    IsHorusConnected = false;
-                }
-            }
-            catch (Exception ex)
-            {
-                UpdateStatusMessage($"Horus connection test failed: {ex.Message}");
-                IsHorusConnected = false;
-                Debug.WriteLine($"Horus connection test error: {ex}");
-            }
-        }
-
-        private async Task ConnectToHorusAsync()
-        {
-            try
-            {
-                IsLoading = true;
-                UpdateStatusMessage("Connecting to Horus media server...");
-
-                // Create connection config
-                var config = new HorusConnectionConfig
-                {
-                    HorusHost = HorusClientUrl.Replace("http://", "").Replace("https://", "").Split(':')[0],
-                    HorusPort = 5050,
-                    DatabaseHost = DatabaseHost,
-                    DatabasePort = DatabasePort,
-                    DatabaseName = DatabaseName,
-                    DatabaseUser = DatabaseUser,
-                    DatabasePassword = DatabasePassword
-                };
-
-                // Validate required fields first
-                if (string.IsNullOrWhiteSpace(config.DatabaseHost) ||
-                    string.IsNullOrWhiteSpace(config.DatabaseUser))
-                {
-                    UpdateStatusMessage("Please configure database credentials in settings first");
-                    IsHorusConnected = false;
-                    return;
-                }
-
-                // Use a fresh service instance to avoid disposal issues
-                using (var connectionService = new HorusMediaService())
-                {
-                    connectionService.UpdateBridgeUrl("http://localhost:5001");
-                    var result = await connectionService.ConnectAsync(config);
-
-                    if (result.Success && result.Data)
-                    {
-                        IsHorusConnected = true;
-                        UpdateStatusMessage("Connected to Horus media server successfully");
-
-                        // Update main service bridge URL
-                        _horusService.UpdateBridgeUrl("http://localhost:5001");
-
-                        // Load recordings after successful connection
-                        await LoadHorusRecordingsAsync();
-                    }
-                    else
-                    {
-                        IsHorusConnected = false;
-                        UpdateStatusMessage($"Failed to connect to Horus: {result.Error}");
-
-                        // Provide specific guidance based on the error
-                        if (result.Error.Contains("database") || result.Error.Contains("Database"))
-                        {
-                            UpdateStatusMessage("Database connection failed. Check credentials and network connectivity.");
-                        }
-                        else if (result.Error.Contains("horus") || result.Error.Contains("Horus"))
-                        {
-                            UpdateStatusMessage("Horus server connection failed. Check if server is accessible.");
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                IsHorusConnected = false;
-                UpdateStatusMessage($"Horus connection error: {ex.Message}");
-                Debug.WriteLine($"Horus connection error: {ex}");
-            }
-            finally
-            {
-                IsLoading = false;
-            }
-        }
-
-        private async Task DisconnectFromHorusAsync()
-        {
-            try
-            {
-                UpdateStatusMessage("Disconnecting from Horus...");
-
-                var result = await _horusService.DisconnectAsync();
-
-                IsHorusConnected = false;
-                HorusRecordings = new List<HorusRecording>();
-                _horusImages.Clear();
-                SelectedRecording = null;
-
-                UpdateStatusMessage(result.Success ? "Disconnected from Horus successfully" : $"Disconnect error: {result.Error}");
-            }
-            catch (Exception ex)
-            {
-                UpdateStatusMessage($"Disconnect error: {ex.Message}");
-                Debug.WriteLine($"Horus disconnect error: {ex}");
-            }
-        }
-
-        private async Task LoadHorusRecordingsAsync()
-        {
-            if (!IsHorusConnected)
-            {
-                UpdateStatusMessage("Not connected to Horus server");
-                return;
-            }
-
-            try
-            {
-                IsLoading = true;
-                UpdateStatusMessage("Loading Horus recordings...");
-
-                // Use a fresh service instance to avoid disposal issues
-                using (var recordingsService = new HorusMediaService())
-                {
-                    recordingsService.UpdateBridgeUrl("http://localhost:5001");
-                    var response = await recordingsService.GetRecordingsAsync();
-
-                    if (response.Success && response.Data != null)
-                    {
-                        HorusRecordings = new List<HorusRecording>(response.Data);
-                        UpdateStatusMessage($"Loaded {HorusRecordings.Count} recordings from Horus");
-
-                        if (HorusRecordings.Count > 0)
-                        {
-                            SelectedRecording = HorusRecordings.FirstOrDefault(r =>
-                                r.Endpoint.Contains(RecordingEndpoint) ||
-                                r.Endpoint.Contains("Rotterdam360")) ?? HorusRecordings[0];
-                        }
-                    }
-                    else
-                    {
-                        UpdateStatusMessage($"Failed to load recordings: {response.Error}");
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                UpdateStatusMessage($"Error loading recordings: {ex.Message}");
-                Debug.WriteLine($"Load recordings error: {ex}");
-            }
-            finally
-            {
-                IsLoading = false;
-            }
-        }
-
-        private async Task LoadHorusImagesAsync()
-        {
-            if (!IsHorusConnected || SelectedRecording == null)
-            {
-                UpdateStatusMessage("Please connect to Horus and select a recording first");
-                return;
-            }
-
-            try
-            {
-                IsLoading = true;
-                UpdateStatusMessage("Loading images from Horus...");
-
-                var request = new HorusImageRequest
-                {
-                    RecordingEndpoint = SelectedRecording.Endpoint,
-                    Count = DefaultNumberOfImages,
-                    Width = DefaultImageWidth,
-                    Height = DefaultImageHeight
-                };
-
-                // Use a fresh service instance to avoid disposal issues
-                using (var imageService = new HorusMediaService())
-                {
-                    imageService.UpdateBridgeUrl("http://localhost:5001");
-                    var response = await imageService.GetImagesAsync(request);
-
-                    if (response.Success && response.Data != null)
-                    {
-                        _horusImages = response.Data;
-                        _currentHorusImageIndex = 0;
-                        _usingHorusImages = true;
-
-                        if (_horusImages.Count > 0)
-                        {
-                            await DisplayHorusImageAsync(0);
-                            CanNavigateFrames = _horusImages.Count > 1;
-                            UpdateHorusFrameInfo();
-                        }
-
-                        UpdateStatusMessage($"Loaded {_horusImages.Count} images from Horus");
-                    }
-                    else
-                    {
-                        UpdateStatusMessage($"Failed to load images: {response.Error}");
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                UpdateStatusMessage($"Error loading images: {ex.Message}");
-                Debug.WriteLine($"Load Horus images error: {ex}");
-            }
-            finally
-            {
-                IsLoading = false;
-            }
-        }
-
-        private async Task DisplayHorusImageAsync(int imageIndex)
-        {
-            try
-            {
-                if (imageIndex < 0 || imageIndex >= _horusImages.Count)
-                    return;
-
-                var horusImage = _horusImages[imageIndex];
-                var imageBytes = horusImage.GetImageBytes();
-
-                if (imageBytes != null)
-                {
-                    await Application.Current.Dispatcher.InvokeAsync(() =>
-                    {
-                        CurrentImage = CreateBitmapFromBytes(imageBytes);
-                        _currentHorusImageIndex = imageIndex;
-                    });
-                }
-            }
-            catch (Exception ex)
-            {
-                UpdateStatusMessage($"Error displaying Horus image: {ex.Message}");
-                Debug.WriteLine($"Display Horus image error: {ex}");
-            }
-        }
-
-        private void UpdateHorusFrameInfo()
-        {
-            if (_horusImages.Count > 0)
-            {
-                FrameInfo = $"Horus Image: {_currentHorusImageIndex + 1}/{_horusImages.Count}";
-            }
-            else
-            {
-                FrameInfo = "No Horus images loaded";
-            }
-        }
-
-        private async Task ConnectToServerAsync()
-        {
-            try
-            {
-                IsLoading = true;
-                UpdateStatusMessage("Connecting to server...");
-                _apiService.UpdateBaseUrl(ServerUrl);
-
-                var response = await _apiService.GetAsync<ServerInfo>("health");
-                if (response.Success)
-                {
-                    IsConnected = true;
-                    UpdateStatusMessage("Connected to server successfully");
-                }
-                else
-                {
-                    UpdateStatusMessage($"Connection failed: {response.Error}");
-                }
-            }
-            catch (Exception ex)
-            {
-                UpdateStatusMessage($"Connection error: {ex.Message}");
-                Debug.WriteLine($"Server connection error: {ex}");
-            }
-            finally
-            {
-                IsLoading = false;
-            }
-        }
-
-        private async Task TestConnectionAsync()
-        {
-            UpdateStatusMessage("Testing connection...");
-            await ConnectToServerAsync();
-        }
-
-        private void DisconnectFromServer()
-        {
-            try
-            {
-                IsConnected = false;
-                UpdateStatusMessage("Disconnected from server");
-                _imageFrames.Clear();
-
-                Application.Current.Dispatcher.Invoke(() =>
-                {
-                    CurrentImage = null;
-                });
-
-                CanNavigateFrames = false;
-                FrameInfo = "Frame: 0/0";
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Disconnect error: {ex}");
-                UpdateStatusMessage($"Disconnect error: {ex.Message}");
-            }
-        }
-
-        private void RefreshView()
-        {
-            try
-            {
-                if (_currentFrame != null)
-                {
-                    Task.Run(async () => await UpdateImageViewAsync());
-                    UpdateStatusMessage("View refreshed");
-                }
-                else
-                {
-                    UpdateStatusMessage("No image to refresh");
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Refresh view error: {ex}");
-                UpdateStatusMessage($"Refresh error: {ex.Message}");
-            }
-        }
+        #region Image Management
 
         private async Task LoadImagesAsync()
         {
-            if (!IsConnected)
-            {
-                UpdateStatusMessage("Please connect to server first");
-                return;
-            }
-
             try
             {
                 IsLoading = true;
                 UpdateStatusMessage("Loading image frames...");
                 _usingHorusImages = false;
 
-                var request = new LoadImagesRequest
+                // This would normally use your API service to load images
+                // For now, we'll simulate loading some test images
+                _imageFrames = new List<ImageFrame>
                 {
-                    Directory = ImageDirectory,
-                    ServerUrl = ServerUrl,
-                    FilePattern = SupportedFormats,
-                    IncludeSubdirectories = IncludeSubdirectories,
-                    MaxImages = MaxImagesToLoad
+                    new ImageFrame { Path = "test_image_1.jpg" },
+                    new ImageFrame { Path = "test_image_2.jpg" }
                 };
 
-                var response = await _apiService.PostAsync<List<ImageFrame>>("images/load", request);
-                if (response.Success && response.Data != null)
-                {
-                    _imageFrames = response.Data;
-                    _currentFrameIndex = 0;
+                _currentFrameIndex = 0;
 
-                    if (_imageFrames.Count > 0)
-                    {
-                        await LoadCurrentFrameAsync();
-                        CanNavigateFrames = _imageFrames.Count > 1;
-                        UpdateFrameInfo();
-                        UpdateStatusMessage($"Loaded {_imageFrames.Count} image frames");
-                    }
-                    else
-                    {
-                        UpdateStatusMessage("No images found in specified directory");
-                    }
+                if (_imageFrames.Count > 0)
+                {
+                    await LoadCurrentFrameAsync();
+                    CanNavigateFrames = _imageFrames.Count > 1;
+                    UpdateFrameInfo();
+                    UpdateStatusMessage($"Loaded {_imageFrames.Count} image frames");
                 }
                 else
                 {
-                    UpdateStatusMessage($"Failed to load images: {response.Error}");
+                    UpdateStatusMessage("No images found");
                 }
             }
             catch (Exception ex)
@@ -1341,9 +326,114 @@ namespace Test.UI
             }
         }
 
+        private async Task LoadHorusImagesAsync()
+        {
+            try
+            {
+                IsLoading = true;
+                UpdateStatusMessage("Loading Horus images...");
+                _usingHorusImages = true;
+
+                // This would integrate with your Horus system
+                // For now, we'll simulate some Horus images
+                _imageFrames = new List<ImageFrame>
+                {
+                    new ImageFrame { Path = "horus_image_1" },
+                    new ImageFrame { Path = "horus_image_2" }
+                };
+
+                _currentFrameIndex = 0;
+
+                if (_imageFrames.Count > 0)
+                {
+                    await LoadCurrentFrameAsync();
+                    CanNavigateFrames = _imageFrames.Count > 1;
+                    UpdateFrameInfo();
+                    UpdateStatusMessage($"Loaded {_imageFrames.Count} Horus image frames");
+                }
+                else
+                {
+                    UpdateStatusMessage("No Horus images available");
+                }
+            }
+            catch (Exception ex)
+            {
+                UpdateStatusMessage($"Error loading Horus images: {ex.Message}");
+                Debug.WriteLine($"Load Horus images error: {ex}");
+            }
+            finally
+            {
+                IsLoading = false;
+            }
+        }
+
+        private async Task LoadCurrentFrameAsync()
+        {
+            await Task.Run(() =>
+            {
+                try
+                {
+                    if (_imageFrames == null || _currentFrameIndex >= _imageFrames.Count)
+                        return;
+
+                    _currentFrame = _imageFrames[_currentFrameIndex];
+
+                    // For now, create a placeholder image
+                    // In your real implementation, you'd load the actual image data
+                    Application.Current.Dispatcher.Invoke(() =>
+                    {
+                        CurrentImage = CreatePlaceholderImage();
+                    });
+
+                    UpdateStatusMessage($"Loaded frame: {_currentFrame.Path}");
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"Load current frame error: {ex}");
+                    UpdateStatusMessage($"Error loading frame: {ex.Message}");
+                }
+            });
+        }
+
+        private async Task PreviousFrameAsync()
+        {
+            if (_currentFrameIndex > 0)
+            {
+                _currentFrameIndex--;
+                await LoadCurrentFrameAsync();
+                UpdateFrameInfo();
+            }
+        }
+
+        private async Task NextFrameAsync()
+        {
+            if (_currentFrameIndex < _imageFrames.Count - 1)
+            {
+                _currentFrameIndex++;
+                await LoadCurrentFrameAsync();
+                UpdateFrameInfo();
+            }
+        }
+
+        private BitmapSource CreatePlaceholderImage()
+        {
+            // Create a simple placeholder image
+            var bitmap = new WriteableBitmap(800, 600, 96, 96, System.Windows.Media.PixelFormats.Bgr24, null);
+            return bitmap;
+        }
+
+        private void UpdateFrameInfo()
+        {
+            FrameInfo = $"Frame: {_currentFrameIndex + 1}/{_imageFrames.Count}";
+        }
+
+        #endregion
+
+        #region AI Detection
+
         private async Task RunDetectionAsync()
         {
-            if ((_currentFrame == null && !_usingHorusImages) || string.IsNullOrWhiteSpace(DetectionText))
+            if (_currentFrame == null || string.IsNullOrWhiteSpace(DetectionText))
             {
                 UpdateStatusMessage("Please load an image and specify detection target");
                 return;
@@ -1354,11 +444,11 @@ namespace Test.UI
                 IsLoading = true;
                 UpdateStatusMessage("Running AI object detection...");
 
-                var request = new DetectionRequest
+                // Prepare detection request for AI API
+                var request = new AiDetectionRequest
                 {
-                    ImagePath = _usingHorusImages ? "horus_current_image" : _currentFrame?.Path,
-                    Model = SelectedModel,
                     DetectionText = DetectionText,
+                    Model = "langsam",
                     Yaw = Yaw,
                     Pitch = Pitch,
                     Roll = Roll,
@@ -1367,23 +457,58 @@ namespace Test.UI
                     IoUThreshold = DefaultIoUThreshold
                 };
 
-                var response = await _apiService.PostAsync<List<DetectionResult>>("detection/detect", request);
-                if (response.Success && response.Data != null)
+                // Handle different image sources
+                if (_usingHorusImages)
                 {
+                    request.HorusCurrentImage = _currentFrame.Path;
+                }
+                else
+                {
+                    request.ImageData = await GetImageAsBase64Async(_currentFrame.Path);
+                }
+
+                // Call the AI API
+                var jsonRequest = JsonConvert.SerializeObject(request);
+                var content = new StringContent(jsonRequest, Encoding.UTF8, "application/json");
+
+                var response = await _httpClient.PostAsync($"{AiApiBaseUrl}/detection/detect", content);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    var jsonResponse = await response.Content.ReadAsStringAsync();
+                    var apiResults = JsonConvert.DeserializeObject<List<AiDetectionResult>>(jsonResponse);
+
+                    // Convert API results to your DetectionResult format
                     await Application.Current.Dispatcher.InvokeAsync(() =>
                     {
                         DetectionResults.Clear();
-                        foreach (var result in response.Data)
+                        foreach (var apiResult in apiResults)
                         {
+                            var result = new DetectionResult
+                            {
+                                ObjectName = apiResult.Label,
+                                Confidence = apiResult.Confidence,
+                                ModelUsed = "AI API",
+                                ProcessingTime = 0.0, // API doesn't return this
+                                BoundingBox = new BoundingBox
+                                {
+                                    X = apiResult.Bbox.X1,
+                                    Y = apiResult.Bbox.Y1,
+                                    Width = apiResult.Bbox.X2 - apiResult.Bbox.X1,
+                                    Height = apiResult.Bbox.Y2 - apiResult.Bbox.Y1
+                                }
+                            };
                             DetectionResults.Add(result);
                         }
                     });
 
-                    UpdateStatusMessage($"Detection completed - found {response.Data.Count} objects");
+                    UpdateStatusMessage($"Detection completed - found {apiResults.Count} objects via AI API");
                 }
                 else
                 {
-                    UpdateStatusMessage($"Detection failed: {response.Error}");
+                    var errorContent = await response.Content.ReadAsStringAsync();
+                    UpdateStatusMessage($"AI API call failed: {response.StatusCode} - {errorContent}");
+                    Debug.WriteLine($"API Error: {errorContent}");
                 }
             }
             catch (Exception ex)
@@ -1397,430 +522,33 @@ namespace Test.UI
             }
         }
 
-        // ===================== WFS Integration =====================
-        private async Task LoadWfsPointsAsync()
-        {
-            try
-            {
-                IsLoading = true;
-                WfsStatus = "WFS: querying...";
-                UpdateStatusMessage("Loading WFS points for current view...");
-
-                var query = await _wfsService.CreateQueryForCurrentViewAsync();
-                if (query == null)
-                {
-                    UpdateStatusMessage("No active map view or extent");
-                    WfsStatus = "WFS: no view";
-                    return;
-                }
-                // Override query limits from settings
-                query.MaxFeatures = WfsMaxFeatures;
-                // Enforce minimum zoom (based on view width in degrees) to prevent whole-country queries
-                var viewWidthDeg = query.BoundingBox?.Width ?? double.MaxValue;
-                Debug.WriteLine($"WFS MinZoom check -> Require: {RequireMinZoomForWfs}, ViewWidthDeg: {viewWidthDeg:F4}, Threshold: {MinWfsViewWidthDegrees:F4}");
-                if (RequireMinZoomForWfs && viewWidthDeg > MinWfsViewWidthDegrees)
-                {
-                    UpdateStatusMessage($"Zoom in further to load WFS (min width {MinWfsViewWidthDegrees:F2}°)");
-                    WfsStatus = "WFS: zoom in";
-                    return;
-                }
-
-                // BBOX-only flow: always query by current extent
-                if (ClearWfsBeforeLoad)
-                    await _mapService.ClearWfsPointsLayerAsync();
-                var resp = await _wfsService.QueryFeaturesWithBboxFallbacksAsync(query);
-                if (!resp.Success || resp.Data?.Features == null || resp.Data.Features.Count == 0)
-                {
-                    UpdateStatusMessage(resp.Success ? "No WFS points in current view." : $"WFS error: {resp.Error}");
-                    WfsStatus = resp.Success ? "WFS: 0 features" : "WFS: error";
-                    return;
-                }
-                var added = await _mapService.AddWfsFeaturesToMapAsync(resp.Data.Features);
-                if (added)
-                {
-                    UpdateStatusMessage($"Added {resp.Data.Features.Count} WFS points to map");
-                    WfsStatus = $"WFS: {resp.Data.Features.Count} loaded";
-                    _hasLoadedOnce = true;
-                }
-                else
-                {
-                    UpdateStatusMessage("Failed to add WFS features to map");
-                    WfsStatus = "WFS: add failed";
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"LoadWfsPointsAsync error: {ex}");
-                UpdateStatusMessage($"WFS load error: {ex.Message}");
-                WfsStatus = "WFS: error";
-            }
-            finally
-            {
-                IsLoading = false;
-                InvalidateCommands();
-            }
-        }
-
-        private void SetupMapAutoRefreshSubscription()
-        {
-            try
-            {
-                // Unsubscribe existing
-                if (_cameraChangedToken != null)
-                {
-                    try { ArcGIS.Desktop.Mapping.Events.MapViewCameraChangedEvent.Unsubscribe((dynamic)_cameraChangedToken); } catch { }
-                    _cameraChangedToken = null;
-                }
-
-                if (!AutoRefreshWfsOnViewChange)
-                    return;
-
-                _cameraChangedToken = ArcGIS.Desktop.Mapping.Events.MapViewCameraChangedEvent.Subscribe(args =>
-                {
-                    try
-                    {
-                        // Only respond to active view changes
-                        if (ArcGIS.Desktop.Mapping.MapView.Active == null || args.MapView != ArcGIS.Desktop.Mapping.MapView.Active)
-                            return;
-
-                        // Ignore auto-refresh until an initial manual load has been performed
-                        if (!_hasLoadedOnce)
-                            return;
-
-                        // Debounce
-                        _viewChangeDebounceCts?.Cancel();
-                        _viewChangeDebounceCts = new System.Threading.CancellationTokenSource();
-                        var token = _viewChangeDebounceCts.Token;
-                        Task.Run(async () =>
-                        {
-                            try
-                            {
-                                await Task.Delay(500, token);
-                                if (!token.IsCancellationRequested)
-                                {
-                                    await LoadWfsPointsAsync();
-                                }
-                            }
-                            catch (TaskCanceledException) { }
-                            catch (Exception ex)
-                            {
-                                System.Diagnostics.Debug.WriteLine($"Auto-refresh error: {ex}");
-                            }
-                        }, token);
-                    }
-                    catch (Exception ex)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"CameraChanged handler error: {ex}");
-                    }
-                });
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"SetupMapAutoRefreshSubscription error: {ex}");
-            }
-        }
-
-        private async Task ClearWfsPointsAsync()
-        {
-            try
-            {
-                IsLoading = true;
-                await _mapService.ClearWfsFeaturesAsync();
-                _selectionState.ClearSelection();
-                OnPropertyChanged(nameof(SelectionInfo));
-                UpdateStatusMessage("Cleared WFS layers and selection");
-                WfsStatus = "WFS: cleared";
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"ClearWfsPointsAsync error: {ex}");
-                UpdateStatusMessage($"WFS clear error: {ex.Message}");
-            }
-            finally
-            {
-                IsLoading = false;
-                InvalidateCommands();
-            }
-        }
-
-        private async Task ActivateSelectToolAsync()
-        {
-            try
-            {
-                await FrameworkApplication.SetCurrentToolAsync("Test_Wfs_SelectTool");
-                UpdateStatusMessage("WFS selection tool active. Click map to select points.");
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"ActivateSelectToolAsync error: {ex}");
-                UpdateStatusMessage($"Activate tool error: {ex.Message}");
-            }
-        }
-
-        // Called by MapSelectionTool when user clicks the map
-        public async Task OnMapPointClickedAsync(MapPoint mapPoint)
-        {
-            try
-            {
-                var candidates = await _mapService.FindFeaturesNearPointAsync(mapPoint, 10);
-                if (candidates == null || candidates.Count == 0)
-                {
-                    UpdateStatusMessage("No WFS points near click");
-                    return;
-                }
-
-                var feature = candidates[0];
-                if (IsMultiSelectMode)
-                    _selectionState.AddFeature(feature);
-                else
-                {
-                    _selectionState.ClearSelection();
-                    _selectionState.AddFeature(feature);
-                }
-
-                await _mapService.UpdateFeatureSelectionAsync(_selectionState.SelectedFeatures);
-                OnPropertyChanged(nameof(SelectionInfo));
-                InvalidateCommands();
-
-                // Initialize section: prefer feature section if valid; else use preferred default (e.g., 20)
-                if (feature.Properties != null && feature.Properties.Section >= 0)
-                    CurrentSection = feature.Properties.Section;
-                else
-                    CurrentSection = PreferredSectionIndex;
-                await DisplayFeatureImageAsync(feature, preferCameraParams: false);
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"OnMapPointClickedAsync error: {ex}");
-                UpdateStatusMessage($"Selection error: {ex.Message}");
-            }
-        }
-
-        private async Task DisplayFeatureImageAsync(WfsFeature feature, bool preferCameraParams = false)
-        {
-            try
-            {
-                if (feature?.Properties == null)
-                {
-                    UpdateStatusMessage("Invalid WFS feature");
-                    return;
-                }
-
-                var imageSvc = new HorusImageService(GetHorusImagesBaseUrl());
-
-                // Try to fill missing IDs from the image URL if present
-                if ((string.IsNullOrWhiteSpace(feature.Properties.RecordingId) || string.IsNullOrWhiteSpace(feature.Properties.Guid)) &&
-                    !string.IsNullOrWhiteSpace(feature.ImageUrl))
-                {
-                    TryPopulateIdsFromImageUrl(feature);
-                }
-
-                // Prefer prebuilt image URL from feature (aligns with WFS host).
-                ApiResponse<System.Windows.Media.Imaging.BitmapSource> resp = null;
-                string attemptedUrl = null;
-                if (!string.IsNullOrWhiteSpace(feature.ImageUrl))
-                {
-                    // Always use sections: build simple URL with current section
-                    var scale = feature.Properties.Scale > 0 ? feature.Properties.Scale : DefaultImageScale;
-                    var simple = ForceScaleSectionOnly(feature.ImageUrl, scale: scale, section: CurrentSection);
-                    Debug.WriteLine($"Attempting section-based image URL: {simple}");
-                    resp = await imageSvc.GetImageByUrlAsync(simple);
-                }
-
-                if (resp == null || !resp.Success)
-                {
-                    // Fallback: build via service base and feature properties (ensures scale defaults)
-                    Debug.WriteLine($"Falling back to service image build for rec={feature?.Properties?.RecordingId}, guid={feature?.Properties?.Guid}");
-                    resp = await imageSvc.GetFeatureImageAsync(feature, Yaw, Pitch, Roll, Fov);
-                }
-                if (resp.Success && resp.Data != null)
-                {
-                    Application.Current.Dispatcher.Invoke(() => CurrentImage = resp.Data);
-                    UpdateStatusMessage($"Loaded image for {feature.Properties.DisplayName}");
-                }
-                else
-                {
-                    var rid = feature?.Properties?.RecordingId ?? "?";
-                    var gid = feature?.Properties?.Guid ?? "?";
-                    UpdateStatusMessage(resp.Success ? "No image data returned" : $"Image error (rec={rid}, guid={gid}): {resp.Error}");
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"DisplayFeatureImageAsync error: {ex}");
-                UpdateStatusMessage($"Image load error: {ex.Message}");
-            }
-        }
-
-        private string AppendCameraParams(string url, double yaw, double pitch, double roll, double fov)
-        {
-            try
-            {
-                var uri = new Uri(url, UriKind.Absolute);
-                var q = System.Web.HttpUtility.ParseQueryString(uri.Query);
-                q.Set("yaw", yaw.ToString(System.Globalization.CultureInfo.InvariantCulture));
-                q.Set("pitch", pitch.ToString(System.Globalization.CultureInfo.InvariantCulture));
-                q.Set("roll", roll.ToString(System.Globalization.CultureInfo.InvariantCulture));
-                q.Set("fov", fov.ToString(System.Globalization.CultureInfo.InvariantCulture));
-                var ub = new UriBuilder(uri) { Query = q.ToString() };
-                return ub.Uri.ToString();
-            }
-            catch
-            {
-                // Fallback: append query string naïvely
-                var sep = url.Contains("?") ? "&" : "?";
-                return $"{url}{sep}yaw={yaw}&pitch={pitch}&roll={roll}&fov={fov}";
-            }
-        }
-
-        private string ForceScaleSectionOnly(string url, int scale, int section)
-        {
-            try
-            {
-                var uri = new Uri(url, UriKind.Absolute);
-                var q = System.Web.HttpUtility.ParseQueryString(uri.Query);
-                q.Set("scale", scale.ToString());
-                q.Set("section", section.ToString());
-                // Remove optional params the server may not accept
-                q.Remove("yaw"); q.Remove("pitch"); q.Remove("roll"); q.Remove("fov"); q.Remove("mode");
-                var ub = new UriBuilder(uri) { Query = q.ToString() };
-                return ub.Uri.ToString();
-            }
-            catch
-            {
-                var basePart = url.Split('?')[0];
-                return $"{basePart}?scale={scale}&section={section}";
-            }
-        }
-
-        private void TryPopulateIdsFromImageUrl(WfsFeature feature)
-        {
-            try
-            {
-                var uri = new Uri(feature.ImageUrl, UriKind.Absolute);
-                var segments = uri.AbsolutePath.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
-                // Expect .../images/{recordingId}/{guid}
-                var idx = Array.IndexOf(segments, "images");
-                if (idx >= 0 && segments.Length > idx + 2)
-                {
-                    var rec = segments[idx + 1];
-                    var guid = segments[idx + 2];
-                    if (string.IsNullOrWhiteSpace(feature.Properties.RecordingId)) feature.Properties.RecordingId = rec;
-                    if (string.IsNullOrWhiteSpace(feature.Properties.Guid)) feature.Properties.Guid = guid;
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"TryPopulateIdsFromImageUrl error: {ex.Message}");
-            }
-        }
-
-        private async Task PrefetchAdjacentSectionsAsync(WfsFeature feature)
-        {
-            try
-            {
-                if (feature == null || string.IsNullOrWhiteSpace(feature.ImageUrl)) return;
-                var baseUrl = feature.ImageUrl;
-                var scale = feature.Properties.Scale > 0 ? feature.Properties.Scale : DefaultImageScale;
-                int prev = (_currentSection - 1 + _sectionCount) % _sectionCount;
-                int next = (_currentSection + 1) % _sectionCount;
-                var urlPrev = ForceScaleSectionOnly(baseUrl, scale, prev);
-                var urlNext = ForceScaleSectionOnly(baseUrl, scale, next);
-                var svc = new HorusImageService(GetHorusImagesBaseUrl());
-                _ = svc.GetImageByUrlAsync(urlPrev);
-                _ = svc.GetImageByUrlAsync(urlNext);
-            }
-            catch { }
-        }
-
-        private string GetHorusImagesBaseUrl()
-        {
-            try
-            {
-                if (!string.IsNullOrWhiteSpace(HorusClientUrl))
-                {
-                    var uri = new Uri(HorusClientUrl, UriKind.Absolute);
-                    // Strip path like '/web/' and return scheme://host:port
-                    var portPart = uri.IsDefaultPort ? "" : $":{uri.Port}";
-                    return $"{uri.Scheme}://{uri.Host}{portPart}";
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"GetHorusImagesBaseUrl parse error: {ex}");
-            }
-            return "https://his-staging.horus.nu";
-        }
-
-        private void NextSelected()
-        {
-            try
-            {
-                if (!_selectionState.HasMultipleSelections) return;
-                var next = _selectionState.GetNext();
-                _ = DisplayFeatureImageAsync(next);
-                _ = _mapService.UpdateFeatureSelectionAsync(_selectionState.SelectedFeatures);
-                OnPropertyChanged(nameof(SelectionInfo));
-                UpdateStatusMessage($"Selected {_selectionState.CurrentIndex + 1}/{_selectionState.SelectionCount}");
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"NextSelected error: {ex}");
-            }
-        }
-
-        private void PreviousSelected()
-        {
-            try
-            {
-                if (!_selectionState.HasMultipleSelections) return;
-                var prev = _selectionState.GetPrevious();
-                _ = DisplayFeatureImageAsync(prev);
-                _ = _mapService.UpdateFeatureSelectionAsync(_selectionState.SelectedFeatures);
-                OnPropertyChanged(nameof(SelectionInfo));
-                UpdateStatusMessage($"Selected {_selectionState.CurrentIndex + 1}/{_selectionState.SelectionCount}");
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"PreviousSelected error: {ex}");
-            }
-        }
-
         private async Task RunDetectionOnSelectionAsync()
         {
-            if (!_selectionState.HasSelection)
+            if (_selectedFeatures?.Count == 0)
             {
-                UpdateStatusMessage("No selected points for detection");
+                UpdateStatusMessage("No selection available for detection");
                 return;
             }
 
             try
             {
                 IsLoading = true;
-                int total = _selectionState.SelectionCount;
-                int cnt = 0;
-                foreach (var feature in _selectionState.SelectedFeatures)
-                {
-                    cnt++;
-                    UpdateStatusMessage($"Detecting {cnt}/{total}: {feature.Properties.DisplayName}");
+                UpdateStatusMessage($"Running detection on {_selectedFeatures.Count} selected points...");
 
-                    // Prefer using image URL so server can fetch directly
-                    var req = new DetectionRequest
+                var total = _selectedFeatures.Count;
+                var processed = 0;
+                var allResults = new List<DetectionResult>();
+
+                foreach (var feature in _selectedFeatures)
+                {
+                    processed++;
+                    UpdateStatusMessage($"Processing selection {processed}/{total}...");
+
+                    var request = new AiDetectionRequest
                     {
-                        ImagePath = feature.ImageUrl ?? new HorusImageUrlRequest
-                        {
-                            RecordingId = feature.Properties.RecordingId,
-                            Guid = feature.Properties.Guid,
-                            Scale = feature.Properties.Scale,
-                            Section = feature.Properties.Section,
-                            Yaw = Yaw,
-                            Pitch = Pitch,
-                            Roll = Roll,
-                            Fov = Fov,
-                            Mode = "spherical"
-                        }.BuildImageUrl("https://his-staging.horus.nu"),
-                        Model = SelectedModel,
+                        HorusCurrentImage = $"{feature.Properties.RecordingId}/{feature.Properties.Guid}",
                         DetectionText = DetectionText,
+                        Model = "langsam",
                         Yaw = Yaw,
                         Pitch = Pitch,
                         Roll = Roll,
@@ -1829,19 +557,54 @@ namespace Test.UI
                         IoUThreshold = DefaultIoUThreshold
                     };
 
-                    var resp = await _apiService.PostAsync<List<DetectionResult>>("detection/detect", req);
-                    if (resp.Success && resp.Data != null)
+                    var jsonRequest = JsonConvert.SerializeObject(request);
+                    var content = new StringContent(jsonRequest, Encoding.UTF8, "application/json");
+
+                    var response = await _httpClient.PostAsync($"{AiApiBaseUrl}/detection/detect", content);
+
+                    if (response.IsSuccessStatusCode)
                     {
-                        // add results to map layer
-                        await _mapService.AddAiDetectionResultsAsync(feature, resp.Data);
+                        var jsonResponse = await response.Content.ReadAsStringAsync();
+                        var apiResults = JsonConvert.DeserializeObject<List<AiDetectionResult>>(jsonResponse);
+
+                        foreach (var apiResult in apiResults)
+                        {
+                            var result = new DetectionResult
+                            {
+                                ObjectName = apiResult.Label,
+                                Confidence = apiResult.Confidence,
+                                ModelUsed = "AI API",
+                                ProcessingTime = 0.0,
+                                BoundingBox = new BoundingBox
+                                {
+                                    X = apiResult.Bbox.X1,
+                                    Y = apiResult.Bbox.Y1,
+                                    Width = apiResult.Bbox.X2 - apiResult.Bbox.X1,
+                                    Height = apiResult.Bbox.Y2 - apiResult.Bbox.Y1
+                                }
+                            };
+                            allResults.Add(result);
+                        }
+
+                        // Add results to the feature for map display
+                        feature.DetectionResults.AddRange(allResults);
                     }
                     else
                     {
-                        Debug.WriteLine($"Detection failed for feature {feature.Id}: {resp.Error}");
+                        Debug.WriteLine($"Detection failed for feature {feature.Id}: {response.StatusCode}");
                     }
                 }
 
-                UpdateStatusMessage($"Detection completed for {total} point(s)");
+                // Update UI with all results
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    foreach (var result in allResults)
+                    {
+                        DetectionResults.Add(result);
+                    }
+                });
+
+                UpdateStatusMessage($"Detection completed for {total} point(s) - found {allResults.Count} total objects");
             }
             catch (Exception ex)
             {
@@ -1851,7 +614,35 @@ namespace Test.UI
             finally
             {
                 IsLoading = false;
-                InvalidateCommands();
+            }
+        }
+
+        private void ClearResults()
+        {
+            DetectionResults.Clear();
+            UpdateStatusMessage("Detection results cleared");
+        }
+
+        #endregion
+
+        #region Helper Methods
+
+        private async Task<string> GetImageAsBase64Async(string imagePath)
+        {
+            if (string.IsNullOrEmpty(imagePath))
+                return null;
+
+            try
+            {
+                // For real implementation, you'd read the actual image file
+                // For now, return null (API will handle Horus images differently)
+                await Task.Delay(1); // Remove async warning
+                return null;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error converting image to base64: {ex}");
+                return null;
             }
         }
 
@@ -1859,343 +650,28 @@ namespace Test.UI
         {
             try
             {
-                Yaw = DefaultYaw;
-                Pitch = DefaultPitch;
-                Roll = DefaultRoll;
-                Fov = DefaultFov;
+                Yaw = 0.0;
+                Pitch = -20.0;
+                Roll = 0.0;
+                Fov = 110.0;
                 UpdateStatusMessage("View reset to defaults");
             }
             catch (Exception ex)
             {
+                UpdateStatusMessage($"Reset view error: {ex.Message}");
                 Debug.WriteLine($"Reset view error: {ex}");
-                UpdateStatusMessage($"Reset error: {ex.Message}");
             }
         }
 
-        private void PreviousFrame()
+        private void UpdateStatusMessage(string message)
         {
-            try
-            {
-                if (_usingHorusImages && _horusImages.Count > 0 && _currentHorusImageIndex > 0)
-                {
-                    Task.Run(async () => await DisplayHorusImageAsync(_currentHorusImageIndex - 1));
-                    UpdateHorusFrameInfo();
-                    InvalidateCommands();
-                }
-                else if (_currentFrameIndex > 0)
-                {
-                    _currentFrameIndex--;
-                    Task.Run(async () => await LoadCurrentFrameAsync());
-                    UpdateFrameInfo();
-                    InvalidateCommands();
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Previous frame error: {ex}");
-                UpdateStatusMessage($"Navigation error: {ex.Message}");
-            }
+            StatusMessage = $"{DateTime.Now:HH:mm:ss} - {message}";
+            Debug.WriteLine($"Status: {message}");
         }
 
-        private void NextFrame()
-        {
-            try
-            {
-                if (_usingHorusImages && _horusImages.Count > 0 && _currentHorusImageIndex < _horusImages.Count - 1)
-                {
-                    Task.Run(async () => await DisplayHorusImageAsync(_currentHorusImageIndex + 1));
-                    UpdateHorusFrameInfo();
-                    InvalidateCommands();
-                }
-                else if (_currentFrameIndex < _imageFrames.Count - 1)
-                {
-                    _currentFrameIndex++;
-                    Task.Run(async () => await LoadCurrentFrameAsync());
-                    UpdateFrameInfo();
-                    InvalidateCommands();
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Next frame error: {ex}");
-                UpdateStatusMessage($"Navigation error: {ex.Message}");
-            }
-        }
-
-        private void FirstFrame()
-        {
-            try
-            {
-                if (_usingHorusImages && _horusImages.Count > 0)
-                {
-                    Task.Run(async () => await DisplayHorusImageAsync(0));
-                    UpdateHorusFrameInfo();
-                    InvalidateCommands();
-                }
-                else if (_imageFrames.Count > 0)
-                {
-                    _currentFrameIndex = 0;
-                    Task.Run(async () => await LoadCurrentFrameAsync());
-                    UpdateFrameInfo();
-                    InvalidateCommands();
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"First frame error: {ex}");
-                UpdateStatusMessage($"Navigation error: {ex.Message}");
-            }
-        }
-
-        private void LastFrame()
-        {
-            try
-            {
-                if (_usingHorusImages && _horusImages.Count > 0)
-                {
-                    Task.Run(async () => await DisplayHorusImageAsync(_horusImages.Count - 1));
-                    UpdateHorusFrameInfo();
-                    InvalidateCommands();
-                }
-                else if (_imageFrames.Count > 0)
-                {
-                    _currentFrameIndex = _imageFrames.Count - 1;
-                    Task.Run(async () => await LoadCurrentFrameAsync());
-                    UpdateFrameInfo();
-                    InvalidateCommands();
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Last frame error: {ex}");
-                UpdateStatusMessage($"Navigation error: {ex.Message}");
-            }
-        }
-
-        private void SaveSettings()
-        {
-            try
-            {
-                var settings = new UserSettings
-                {
-                    ServerUrl = ServerUrl,
-                    DefaultImageDirectory = DefaultImageDirectory,
-                    DefaultModel = DefaultModel,
-                    DefaultConfidenceThreshold = DefaultConfidenceThreshold,
-                    DefaultIoUThreshold = DefaultIoUThreshold,
-                    CameraDefaults = new CameraDefaults
-                    {
-                        Yaw = DefaultYaw,
-                        Pitch = DefaultPitch,
-                        Roll = DefaultRoll,
-                        Fov = DefaultFov
-                    },
-                    UISettings = new UISettings
-                    {
-                        AutoConnect = AutoConnect,
-                        RememberWindowSize = true,
-                        ShowTooltips = true,
-                        EnableAnimations = true,
-                        Theme = "Modern",
-                        AutoRefreshWfsOnViewChange = AutoRefreshWfsOnViewChange,
-                        ClearWfsBeforeLoad = ClearWfsBeforeLoad,
-                        ForceWebMercator = ForceWebMercator,
-                        WfsMaxFeatures = WfsMaxFeatures,
-                        RequireMinZoomForWfs = RequireMinZoomForWfs,
-                        MinWfsViewWidthDegrees = MinWfsViewWidthDegrees,
-                        ImageSectionCount = SectionCount,
-                        DefaultImageScale = DefaultImageScale,
-                        PreferredSectionIndex = PreferredSectionIndex
-                    },
-                    DatabaseHost = DatabaseHost,
-                    DatabasePort = DatabasePort,
-                    DatabaseName = DatabaseName,
-                    DatabaseUser = DatabaseUser,
-                    DatabasePassword = DatabasePassword,
-                    RecordingEndpoint = RecordingEndpoint,
-                    HorusClientUrl = HorusClientUrl,
-                    DefaultNumberOfImages = DefaultNumberOfImages,
-                    DefaultImageWidth = DefaultImageWidth,
-                    DefaultImageHeight = DefaultImageHeight
-                };
-
-                _settingsService.SaveSettings(settings);
-                UpdateStatusMessage("Settings saved successfully");
-            }
-            catch (Exception ex)
-            {
-                UpdateStatusMessage($"Error saving settings: {ex.Message}");
-                Debug.WriteLine($"Save settings error: {ex}");
-            }
-        }
-
-        private void ResetSettings()
-        {
-            try
-            {
-                var defaultSettings = new UserSettings();
-                LoadSettingsFromObject(defaultSettings);
-                UpdateStatusMessage("Settings reset to defaults");
-            }
-            catch (Exception ex)
-            {
-                UpdateStatusMessage($"Error resetting settings: {ex.Message}");
-                Debug.WriteLine($"Reset settings error: {ex}");
-            }
-        }
-
-        private async Task TestDatabaseConnectionAsync()
-        {
-            try
-            {
-                UpdateStatusMessage("Testing database connection...");
-
-                var config = new HorusConnectionConfig
-                {
-                    DatabaseHost = DatabaseHost,
-                    DatabasePort = DatabasePort,
-                    DatabaseName = DatabaseName,
-                    DatabaseUser = DatabaseUser,
-                    DatabasePassword = DatabasePassword
-                };
-
-                if (string.IsNullOrWhiteSpace(DatabaseHost) || string.IsNullOrWhiteSpace(DatabaseUser))
-                {
-                    UpdateStatusMessage("Please provide database host and username");
-                    return;
-                }
-
-                await Task.Delay(500);
-
-                IsDatabaseConnected = !string.IsNullOrWhiteSpace(DatabaseHost) &&
-                                    !string.IsNullOrWhiteSpace(DatabaseUser);
-
-                UpdateStatusMessage(IsDatabaseConnected ?
-                    "Database connection parameters validated" :
-                    "Database connection validation failed");
-            }
-            catch (Exception ex)
-            {
-                IsDatabaseConnected = false;
-                UpdateStatusMessage($"Database connection test failed: {ex.Message}");
-                Debug.WriteLine($"Database test error: {ex}");
-            }
-        }
-
-        private void BrowseDirectory()
-        {
-            try
-            {
-                UpdateStatusMessage("Directory browser - please enter path manually for now");
-            }
-            catch (Exception ex)
-            {
-                UpdateStatusMessage($"Directory browser error: {ex.Message}");
-                Debug.WriteLine($"Browse directory error: {ex}");
-            }
-        }
         #endregion
 
-        #region Helper Methods
-        private async Task LoadCurrentFrameAsync()
-        {
-            try
-            {
-                if (_currentFrameIndex < 0 || _currentFrameIndex >= _imageFrames.Count)
-                    return;
-
-                _currentFrame = _imageFrames[_currentFrameIndex];
-                await UpdateImageViewAsync();
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Load current frame error: {ex}");
-                UpdateStatusMessage($"Frame load error: {ex.Message}");
-            }
-        }
-
-        private async Task UpdateImageViewAsync()
-        {
-            try
-            {
-                // If an image from WFS selection is currently shown, refresh it using current view params
-                if (_selectionState.HasSelection && _selectionState.CurrentFeature != null && !_usingHorusImages && _currentFrame == null)
-                {
-                    var feat = _selectionState.CurrentFeature;
-                    await DisplayFeatureImageAsync(feat, preferCameraParams: true);
-                    return;
-                }
-
-                if (_usingHorusImages && _horusImages.Count > 0 && _currentHorusImageIndex < _horusImages.Count)
-                {
-                    var horusImage = _horusImages[_currentHorusImageIndex];
-                    var imageBytes = horusImage.GetImageBytes();
-
-                    if (imageBytes != null)
-                    {
-                        await Application.Current.Dispatcher.InvokeAsync(() =>
-                        {
-                            CurrentImage = CreateBitmapFromBytes(imageBytes);
-                        });
-                    }
-                    return;
-                }
-
-                if (_currentFrame == null) return;
-
-                var request = new RenderRequest
-                {
-                    ImagePath = _currentFrame.Path,
-                    Yaw = Yaw,
-                    Pitch = Pitch,
-                    Roll = Roll,
-                    Fov = Fov,
-                    Width = 800,
-                    Height = 600
-                };
-
-                var response = await _apiService.PostAsync<byte[]>("images/render", request);
-                if (response.Success && response.Data != null)
-                {
-                    await Application.Current.Dispatcher.InvokeAsync(() =>
-                    {
-                        CurrentImage = CreateBitmapFromBytes(response.Data);
-                    });
-                }
-            }
-            catch (Exception ex)
-            {
-                UpdateStatusMessage($"Error updating image: {ex.Message}");
-                Debug.WriteLine($"Update image view error: {ex}");
-            }
-        }
-
-        private BitmapSource CreateBitmapFromBytes(byte[] imageBytes)
-        {
-            try
-            {
-                using (var stream = new MemoryStream(imageBytes))
-                {
-                    var bitmap = new BitmapImage();
-                    bitmap.BeginInit();
-                    bitmap.CacheOption = BitmapCacheOption.OnLoad;
-                    bitmap.StreamSource = stream;
-                    bitmap.EndInit();
-                    bitmap.Freeze();
-                    return bitmap;
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Create bitmap error: {ex}");
-                return null;
-            }
-        }
-
-        private void UpdateFrameInfo()
-        {
-            FrameInfo = $"Frame: {_currentFrameIndex + 1}/{_imageFrames.Count}";
-        }
+        #region Settings Management
 
         private void LoadSettings()
         {
@@ -2204,211 +680,268 @@ namespace Test.UI
                 var settings = _settingsService.GetSettings();
                 if (settings != null)
                 {
-                    LoadSettingsFromObject(settings);
-                }
-                else
-                {
-                    Debug.WriteLine("Settings service returned null, using defaults");
-                    LoadSettingsFromObject(new UserSettings());
+                    ServerUrl = settings.ServerUrl ?? "http://192.168.6.100:5050";
+                    ImageDirectory = settings.DefaultImageDirectory ?? "/web/images/";
+                    DefaultConfidenceThreshold = settings.DefaultConfidenceThreshold;
+                    DefaultIoUThreshold = settings.DefaultIoUThreshold;
+
+                    if (settings.CameraDefaults != null)
+                    {
+                        Yaw = settings.CameraDefaults.Yaw;
+                        Pitch = settings.CameraDefaults.Pitch;
+                        Roll = settings.CameraDefaults.Roll;
+                        Fov = settings.CameraDefaults.Fov;
+                    }
+
+                    Debug.WriteLine("Settings loaded successfully");
                 }
             }
             catch (Exception ex)
             {
                 UpdateStatusMessage($"Settings load error: {ex.Message}");
                 Debug.WriteLine($"Load settings error: {ex}");
-                LoadSettingsFromObject(new UserSettings());
             }
         }
 
-        private void LoadSettingsFromObject(UserSettings settings)
+        private void OpenSettings()
         {
             try
             {
-                if (settings == null)
-                {
-                    Debug.WriteLine("LoadSettingsFromObject received null settings");
-                    return;
-                }
-
-                ServerUrl = settings.ServerUrl ?? "http://192.168.6.100:5050";
-                DefaultImageDirectory = settings.DefaultImageDirectory ?? "/web/images/";
-                ImageDirectory = settings.DefaultImageDirectory ?? "/web/images/";
-                DefaultModel = settings.DefaultModel ?? "GroundingLangSAM";
-                SelectedModel = settings.DefaultModel ?? "GroundingLangSAM";
-                DefaultConfidenceThreshold = settings.DefaultConfidenceThreshold;
-                DefaultIoUThreshold = settings.DefaultIoUThreshold;
-
-                if (settings.CameraDefaults != null)
-                {
-                    DefaultYaw = settings.CameraDefaults.Yaw;
-                    DefaultPitch = settings.CameraDefaults.Pitch;
-                    DefaultRoll = settings.CameraDefaults.Roll;
-                    DefaultFov = settings.CameraDefaults.Fov;
-                }
-
-                if (settings.UISettings != null)
-                {
-                    AutoConnect = settings.UISettings.AutoConnect;
-                    AutoRefreshWfsOnViewChange = settings.UISettings.AutoRefreshWfsOnViewChange;
-                    ClearWfsBeforeLoad = settings.UISettings.ClearWfsBeforeLoad;
-                    ForceWebMercator = settings.UISettings.ForceWebMercator;
-                    WfsMaxFeatures = settings.UISettings.WfsMaxFeatures;
-                    RequireMinZoomForWfs = settings.UISettings.RequireMinZoomForWfs;
-                    MinWfsViewWidthDegrees = settings.UISettings.MinWfsViewWidthDegrees;
-                    SectionCount = settings.UISettings.ImageSectionCount;
-                    DefaultImageScale = settings.UISettings.DefaultImageScale;
-                    PreferredSectionIndex = settings.UISettings.PreferredSectionIndex;
-                }
-
-                Yaw = DefaultYaw;
-                Pitch = DefaultPitch;
-                Roll = DefaultRoll;
-                Fov = DefaultFov;
-
-                DetectionText = DefaultDetectionTarget;
-
-                DatabaseHost = settings.DatabaseHost ?? "";
-                DatabasePort = settings.DatabasePort ?? "5432";
-                DatabaseName = settings.DatabaseName ?? "HorusWebMoviePlayer";
-                DatabaseUser = settings.DatabaseUser ?? "";
-                DatabasePassword = settings.DatabasePassword ?? "";
-
-                RecordingEndpoint = settings.RecordingEndpoint ?? "Rotterdam360\\\\Ladybug5plus";
-                HorusClientUrl = settings.HorusClientUrl ?? "http://10.0.10.100:5050/web/";
-                DefaultNumberOfImages = settings.DefaultNumberOfImages;
-                DefaultImageWidth = settings.DefaultImageWidth;
-                DefaultImageHeight = settings.DefaultImageHeight;
-
-                // Ensure map service respects current SR preference
-                _mapService.ForceWebMercator = ForceWebMercator;
-                _ = _mapService.InitializeAsync();
-                SetupMapAutoRefreshSubscription();
+                // You would create a settings window here
+                // For now, just show a message
+                UpdateStatusMessage("Settings window would open here");
+                IsSettingsOpen = true;
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Load settings from object error: {ex}");
-                UpdateStatusMessage($"Settings load error: {ex.Message}");
+                UpdateStatusMessage($"Error opening settings: {ex.Message}");
+                Debug.WriteLine($"Open settings error: {ex}");
             }
         }
 
-        private void UpdateStatusMessage(string message)
+        private void CloseSettings()
         {
             try
             {
-                if (Application.Current.Dispatcher.CheckAccess())
+                _settingsWindow?.Close();
+                IsSettingsOpen = false;
+                UpdateStatusMessage("Settings window closed");
+            }
+            catch (Exception ex)
+            {
+                UpdateStatusMessage($"Error closing settings: {ex.Message}");
+                Debug.WriteLine($"Close settings error: {ex}");
+            }
+        }
+
+        #endregion
+
+        #region WFS Management
+
+        private async Task LoadWfsPointsAsync()
+        {
+            try
+            {
+                IsLoading = true;
+                WfsStatus = "WFS: querying...";
+                UpdateStatusMessage("Loading WFS points for current view...");
+
+                // Create a simple bounding box for testing
+                var boundingBox = new GeoBoundingBox
                 {
-                    StatusMessage = message;
+                    MinX = -180,
+                    MinY = -90,
+                    MaxX = 180,
+                    MaxY = 90
+                };
+
+                var response = await _wfsService.QueryFeaturesAsync(boundingBox, WfsMaxFeatures);
+
+                if (response.Success && response.Data?.Features?.Any() == true)
+                {
+                    _selectedFeatures = response.Data.Features;
+
+                    UpdateStatusMessage($"Loaded {response.Data.Features.Count} WFS points");
+                    WfsStatus = $"WFS: {response.Data.Features.Count} points";
+                    OnPropertyChanged(nameof(SelectionInfo));
                 }
                 else
                 {
-                    Application.Current.Dispatcher.BeginInvoke(new Action(() => StatusMessage = message));
+                    UpdateStatusMessage("No WFS points found in current view");
+                    WfsStatus = "WFS: no points";
                 }
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Update status message error: {ex}");
+                UpdateStatusMessage($"WFS query error: {ex.Message}");
+                WfsStatus = "WFS: error";
+                Debug.WriteLine($"WFS query error: {ex}");
+            }
+            finally
+            {
+                IsLoading = false;
             }
         }
 
-        private void InvalidateCommands()
+        private void ClearSelection()
         {
-            try
-            {
-                if (Application.Current.Dispatcher.CheckAccess())
-                {
-                    CommandManager.InvalidateRequerySuggested();
-                }
-                else
-                {
-                    Application.Current.Dispatcher.BeginInvoke(new Action(() =>
-                        CommandManager.InvalidateRequerySuggested()));
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Invalidate commands error: {ex}");
-            }
+            _selectedFeatures?.Clear();
+            OnPropertyChanged(nameof(SelectionInfo));
+            UpdateStatusMessage("Selection cleared");
         }
+
         #endregion
 
-        #region INotifyPropertyChanged
-        public new event PropertyChangedEventHandler PropertyChanged;
+        #region Cleanup
 
-        protected virtual void OnPropertyChanged([CallerMemberName] string propertyName = null)
-        {
-            try
-            {
-                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"PropertyChanged error for {propertyName}: {ex}");
-            }
-        }
-
-        protected new bool SetProperty<T>(ref T backingStore, T value, [CallerMemberName] string propertyName = "")
-        {
-            try
-            {
-                if (EqualityComparer<T>.Default.Equals(backingStore, value))
-                    return false;
-
-                backingStore = value;
-                OnPropertyChanged(propertyName);
-                return true;
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"SetProperty error for {propertyName}: {ex}");
-                return false;
-            }
-        }
-        #endregion
-
-        #region Static Methods and Cleanup
-        /// <summary>
-        /// Show the DockPane.
-        /// </summary>
-        internal static void Show()
-        {
-            try
-            {
-                DockPane pane = FrameworkApplication.DockPaneManager.Find(_dockPaneID);
-                pane?.Activate();
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Show dock pane error: {ex}");
-            }
-        }
-
-        /// <summary>
-        /// Cleanup resources when the dock pane is closed
-        /// </summary>
         protected override void OnHidden()
         {
             try
             {
+                _httpClient?.Dispose();
+                _wfsService?.Dispose();
                 CloseSettings();
-                _apiService?.Dispose();
-                _horusService?.Dispose();
-                try
-                {
-                    if (_cameraChangedToken != null)
-                    {
-                        try { ArcGIS.Desktop.Mapping.Events.MapViewCameraChangedEvent.Unsubscribe((dynamic)_cameraChangedToken); } catch { }
-                        _cameraChangedToken = null;
-                    }
-                    _viewChangeDebounceCts?.Cancel();
-                }
-                catch { }
-                base.OnHidden();
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"OnHidden cleanup error: {ex}");
+                Debug.WriteLine($"Cleanup error: {ex}");
+            }
+            finally
+            {
+                base.OnHidden();
             }
         }
+
+        #endregion
+
+        #region INotifyPropertyChanged
+
+        public new event PropertyChangedEventHandler PropertyChanged;
+
+        protected virtual void OnPropertyChanged([CallerMemberName] string propertyName = null)
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        }
+
+        protected bool SetProperty<T>(ref T field, T value, [CallerMemberName] string propertyName = null)
+        {
+            if (Equals(field, value)) return false;
+            field = value;
+            OnPropertyChanged(propertyName);
+            return true;
+        }
+
+        #endregion
+
+        #region Static
+
+        public static SphericalViewerViewModel Create()
+        {
+            return new SphericalViewerViewModel();
+        }
+
+        protected override Task InitializeAsync()
+        {
+            return base.InitializeAsync();
+        }
+
         #endregion
     }
+
+    #region AI API Data Models
+
+    public class AiDetectionRequest
+    {
+        [JsonProperty("image_data")]
+        public string ImageData { get; set; }
+
+        [JsonProperty("horus_current_image")]
+        public string HorusCurrentImage { get; set; }
+
+        [JsonProperty("detection_text")]
+        public string DetectionText { get; set; }
+
+        [JsonProperty("model")]
+        public string Model { get; set; }
+
+        [JsonProperty("yaw")]
+        public double Yaw { get; set; }
+
+        [JsonProperty("pitch")]
+        public double Pitch { get; set; }
+
+        [JsonProperty("roll")]
+        public double Roll { get; set; }
+
+        [JsonProperty("fov")]
+        public double Fov { get; set; }
+
+        [JsonProperty("confidence_threshold")]
+        public double ConfidenceThreshold { get; set; }
+
+        [JsonProperty("iou_threshold")]
+        public double IoUThreshold { get; set; }
+    }
+
+    public class AiDetectionResult
+    {
+        [JsonProperty("id")]
+        public string Id { get; set; }
+
+        [JsonProperty("label")]
+        public string Label { get; set; }
+
+        [JsonProperty("confidence")]
+        public double Confidence { get; set; }
+
+        [JsonProperty("bbox")]
+        public AiBoundingBox Bbox { get; set; }
+
+        [JsonProperty("ground_point")]
+        public AiGroundPoint GroundPoint { get; set; }
+
+        [JsonProperty("geographic_location")]
+        public AiGeographicLocation GeographicLocation { get; set; }
+    }
+
+    public class AiBoundingBox
+    {
+        [JsonProperty("x1")]
+        public double X1 { get; set; }
+
+        [JsonProperty("y1")]
+        public double Y1 { get; set; }
+
+        [JsonProperty("x2")]
+        public double X2 { get; set; }
+
+        [JsonProperty("y2")]
+        public double Y2 { get; set; }
+
+        [JsonProperty("confidence")]
+        public double Confidence { get; set; }
+    }
+
+    public class AiGroundPoint
+    {
+        [JsonProperty("x")]
+        public double X { get; set; }
+
+        [JsonProperty("y")]
+        public double Y { get; set; }
+    }
+
+    public class AiGeographicLocation
+    {
+        [JsonProperty("lat")]
+        public double Lat { get; set; }
+
+        [JsonProperty("lon")]
+        public double Lon { get; set; }
+
+        [JsonProperty("alt")]
+        public double Alt { get; set; }
+    }
+
+    #endregion
 }

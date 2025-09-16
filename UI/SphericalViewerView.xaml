@@ -247,9 +247,30 @@
                                 BorderThickness="1"
                                 Margin="0,0,0,8">
                             <Grid>
-                                <Image Source="{Binding CurrentImage}" 
+                                <Image x:Name="MainImage"
+                                       Source="{Binding CurrentImage}" 
                                        Stretch="Uniform"
-                                       RenderOptions.BitmapScalingMode="HighQuality"/>
+                                       RenderOptions.BitmapScalingMode="HighQuality"
+                                       MouseLeftButtonDown="MainImage_MouseLeftButtonDown"
+                                       MouseLeftButtonUp="MainImage_MouseLeftButtonUp"
+                                       MouseMove="MainImage_MouseMove"
+                                       MouseWheel="MainImage_MouseWheel"
+                                       Cursor="Hand"/>
+
+                                <!-- Section indicator overlay -->
+                                <Border HorizontalAlignment="Right"
+                                        VerticalAlignment="Top"
+                                        Margin="8"
+                                        Padding="6,3"
+                                        CornerRadius="4"
+                                        Background="#80000000">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="Section: " Foreground="White" FontFamily="Segoe UI" FontSize="12"/>
+                                        <TextBlock Text="{Binding CurrentSection}" Foreground="White" FontFamily="Segoe UI" FontSize="12"/>
+                                        <TextBlock Text=" / " Foreground="White" FontFamily="Segoe UI" FontSize="12"/>
+                                        <TextBlock Text="{Binding SectionCount}" Foreground="White" FontFamily="Segoe UI" FontSize="12"/>
+                                    </StackPanel>
+                                </Border>
 
                                 <!-- Professional Placeholder -->
                                 <StackPanel HorizontalAlignment="Center" 
@@ -484,6 +505,45 @@
                 IsEnabled="{Binding IsHorusConnected}"
                 HorizontalAlignment="Left"
                 MinWidth="150"/>
+                    </Grid>
+                </GroupBox>
+
+                <!-- WFS &amp; Selection -->
+                <GroupBox Header="WFS &amp; Selection" Style="{StaticResource EsriGroupBox}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
+                            <Button Content="Load WFS Points" Style="{StaticResource EsriButton}"
+                                    Command="{Binding LoadWfsPointsCommand}"/>
+                            <Button Content="Clear WFS" Style="{StaticResource EsriSecondaryButton}"
+                                    Command="{Binding ClearWfsPointsCommand}"/>
+                            <Button Content="Activate Select Tool" Style="{StaticResource EsriSecondaryButton}"
+                                    Command="{Binding ActivateSelectToolCommand}"/>
+                        </StackPanel>
+
+                        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,8">
+                            <CheckBox Content="Multi-select" IsChecked="{Binding IsMultiSelectMode}" Margin="0,0,12,0"/>
+                            <Button Content="Prev" Style="{StaticResource EsriToolButton}"
+                                    Command="{Binding PreviousSelectedCommand}"/>
+                            <Button Content="Next" Style="{StaticResource EsriToolButton}"
+                                    Command="{Binding NextSelectedCommand}"/>
+                            <Button Content="Detect Selection" Style="{StaticResource EsriButton}"
+                                    Command="{Binding RunDetectionOnSelectionCommand}"/>
+                        </StackPanel>
+
+                        <StackPanel Grid.Row="2" Orientation="Horizontal">
+                            <TextBlock Text="{Binding WfsStatus}" Style="{StaticResource EsriLabel}" Margin="0,0,12,0"/>
+                            <TextBlock Text="{Binding SelectionInfo}" Style="{StaticResource EsriLabel}"/>
+                        </StackPanel>
                     </Grid>
                 </GroupBox>
 

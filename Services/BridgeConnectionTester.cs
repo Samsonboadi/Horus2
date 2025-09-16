@@ -55,7 +55,7 @@ namespace Test.Services
 
                         return (true, "Bridge server is running", details);
                     }
-                    catch (JsonException jsonEx)
+                    catch (JsonException)
                     {
                         return (true, "Bridge server is running", $"Response: {content}");
                     }

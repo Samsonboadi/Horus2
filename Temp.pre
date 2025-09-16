@@ -1,0 +1,439 @@
+using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.IO;
+using System.Runtime.CompilerServices;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Input;
+using System.Windows.Media.Imaging;
+using ArcGIS.Desktop.Framework.Contracts;
+using ArcGIS.Desktop.Framework;
+using ArcGIS.Desktop.Framework.Threading.Tasks;
+using Test.Models;
+using Test.Services;
+using Test.ViewModels;
+using RelayCommand = Test.ViewModels.RelayCommand;
+using AsyncRelayCommand = Test.ViewModels.AsyncRelayCommand;
+using System.Diagnostics;
+using System.Linq;
+
+namespace Test.UI
+{
+    internal class SphericalViewerViewModel : DockPane, INotifyPropertyChanged
+    {
+        private const string _dockPaneID = "Test_SphericalViewer_DockPane";
+
+        #region Private Fields
+        private readonly PythonApiService _apiService;
+        private readonly SettingsService _settingsService;
+        private readonly HorusMediaService _horusService;
+
+        private ImageFrame _currentFrame;
+        private List<ImageFrame> _imageFrames = new List<ImageFrame>();
+        private int _currentFrameIndex = 0;
+        private bool _isSettingsOpen = false;
+
+        private List<HorusRecording> _horusRecordings = new List<HorusRecording>();
+        private List<HorusImage> _horusImages = new List<HorusImage>();
+        private HorusRecording _selectedRecording;
+        private int _currentHorusImageIndex = 0;
+        private bool _usingHorusImages = false;
+
+        // Settings window reference
+        private Window _settingsWindow;
+        #endregion
+
+        #region Properties
+        private string _serverUrl = "http://192.168.6.100:5050";
+        public string ServerUrl
+        {
+            get => _serverUrl;
+            set => SetProperty(ref _serverUrl, value);
+        }
+
+        private string _imageDirectory = "/web/images/";
+        public string ImageDirectory
+        {
+            get => _imageDirectory;
+            set => SetProperty(ref _imageDirectory, value);
+        }
+
+        private BitmapSource _currentImage;
+        public BitmapSource CurrentImage
+        {
+            get => _currentImage;
+            set
+            {
+                if (SetProperty(ref _currentImage, value))
+                {
+                    OnPropertyChanged(nameof(HasImage));
+                }
+            }
+        }
+
+        public bool HasImage => CurrentImage != null;
+
+        private double _yaw = 0.0;
+        public double Yaw
+        {
+            get => _yaw;
+            set
+            {
+                if (SetProperty(ref _yaw, value))
+                {
+                    OnPropertyChanged(nameof(YawAngle));
+                    QueuedTask.Run(async () => await UpdateImageViewAsync());
+                }
+            }
+        }
+
+        public double YawAngle => (_yaw + 180) * 2;
+
+        private double _pitch = -20.0;
+        public double Pitch
+        {
+            get => _pitch;
+            set
+            {
+                if (SetProperty(ref _pitch, value))
+                {
+                    OnPropertyChanged(nameof(PitchAngle));
+                    QueuedTask.Run(async () => await UpdateImageViewAsync());
+                }
+            }
+        }
+
+        public double PitchAngle => (_pitch + 90) * 2;
+
+        private double _roll = 0.0;
+        public double Roll
+        {
+            get => _roll;
+            set
+            {
+                if (SetProperty(ref _roll, value))
+                {
+                    OnPropertyChanged(nameof(RollAngle));
+                    QueuedTask.Run(async () => await UpdateImageViewAsync());
+                }
+            }
+        }
+
+        public double RollAngle => (_roll + 180) * 2;
+
+        private double _fov = 110.0;
+        public double Fov
+        {
+            get => _fov;
+            set
+            {
+                if (SetProperty(ref _fov, value))
+                {
+                    OnPropertyChanged(nameof(FovAngle));
+                    QueuedTask.Run(async () => await UpdateImageViewAsync());
+                }
+            }
+        }
+
+        public double FovAngle => ((_fov - 30) / 150) * 360;
+
+        private string _detectionText = "pole";
+        public string DetectionText
+        {
+            get => _detectionText;
+            set => SetProperty(ref _detectionText, value);
+        }
+
+        private string _statusMessage = "Spherical Image Viewer loaded successfully!";
+        public string StatusMessage
+        {
+            get => _statusMessage;
+            set => SetProperty(ref _statusMessage, value);
+        }
+
+        private bool _isConnected = false;
+        public bool IsConnected
+        {
+            get => _isConnected;
+            set => SetProperty(ref _isConnected, value);
+        }
+
+        private bool _isLoading = false;
+        public bool IsLoading
+        {
+            get => _isLoading;
+            set => SetProperty(ref _isLoading, value);
+        }
+
+        public ObservableCollection<string> AvailableModels { get; private set; }
+
+        private string _selectedModel = "GroundingLangSAM";
+        public string SelectedModel
+        {
+            get => _selectedModel;
+            set => SetProperty(ref _selectedModel, value);
+        }
+
+        private string _frameInfo = "Frame: 0/0";
+        public string FrameInfo
+        {
+            get => _frameInfo;
+            set => SetProperty(ref _frameInfo, value);
+        }
+
+        private bool _canNavigateFrames = false;
+        public bool CanNavigateFrames
+        {
+            get => _canNavigateFrames;
+            set => SetProperty(ref _canNavigateFrames, value);
+        }
+
+        private ObservableCollection<DetectionResult> _detectionResults;
+        public ObservableCollection<DetectionResult> DetectionResults
+        {
+            get => _detectionResults;
+            private set => SetProperty(ref _detectionResults, value);
+        }
+
+        // Settings Properties
+        private bool _autoConnect = false;
+        public bool AutoConnect
+        {
+            get => _autoConnect;
+            set => SetProperty(ref _autoConnect, value);
+        }
+
+        private int _connectionTimeout = 30;
+        public int ConnectionTimeout
+        {
+            get => _connectionTimeout;
+            set => SetProperty(ref _connectionTimeout, value);
+        }
+
+        private string _defaultImageDirectory = "/web/images/";
+        public string DefaultImageDirectory
+        {
+            get => _defaultImageDirectory;
+            set => SetProperty(ref _defaultImageDirectory, value);
+        }
+
+        private string _supportedFormats = "*.jpg,*.png,*.jpeg,*.tiff";
+        public string SupportedFormats
+        {
+            get => _supportedFormats;
+            set => SetProperty(ref _supportedFormats, value);
+        }
+
+        private int _maxImagesToLoad = 1000;
+        public int MaxImagesToLoad
+        {
+            get => _maxImagesToLoad;
+            set => SetProperty(ref _maxImagesToLoad, value);
+        }
+
+        private bool _includeSubdirectories = true;
+        public bool IncludeSubdirectories
+        {
+            get => _includeSubdirectories;
+            set => SetProperty(ref _includeSubdirectories, value);
+        }
+
+        private double _defaultYaw = 0.0;
+        public double DefaultYaw
+        {
+            get => _defaultYaw;
+            set => SetProperty(ref _defaultYaw, value);
+        }
+
+        private double _defaultPitch = -20.0;
+        public double DefaultPitch
+        {
+            get => _defaultPitch;
+            set => SetProperty(ref _defaultPitch, value);
+        }
+
+        private double _defaultRoll = 0.0;
+        public double DefaultRoll
+        {
+            get => _defaultRoll;
+            set => SetProperty(ref _defaultRoll, value);
+        }
+
+        private double _defaultFov = 110.0;
+        public double DefaultFov
+        {
+            get => _defaultFov;
+            set => SetProperty(ref _defaultFov, value);
+        }
+
+        private string _defaultModel = "GroundingLangSAM";
+        public string DefaultModel
+        {
+            get => _defaultModel;
+            set => SetProperty(ref _defaultModel, value);
+        }
+
+        private double _defaultConfidenceThreshold = 0.3;
+        public double DefaultConfidenceThreshold
+        {
+            get => _defaultConfidenceThreshold;
+            set => SetProperty(ref _defaultConfidenceThreshold, value);
+        }
+
+        private double _defaultIoUThreshold = 0.5;
+        public double DefaultIoUThreshold
+        {
+            get => _defaultIoUThreshold;
+            set => SetProperty(ref _defaultIoUThreshold, value);
+        }
+
+        private string _defaultDetectionTarget = "pole";
+        public string DefaultDetectionTarget
+        {
+            get => _defaultDetectionTarget;
+            set => SetProperty(ref _defaultDetectionTarget, value);
+        }
+
+        // Database Connection Properties
+        private string _databaseHost = "";
+        public string DatabaseHost
+        {
+            get => _databaseHost;
+            set => SetProperty(ref _databaseHost, value);
+        }
+
+        private string _databasePort = "5432";
+        public string DatabasePort
+        {
+            get => _databasePort;
+            set => SetProperty(ref _databasePort, value);
+        }
+
+        private string _databaseName = "HorusWebMoviePlayer";
+        public string DatabaseName
+        {
+            get => _databaseName;
+            set => SetProperty(ref _databaseName, value);
+        }
+
+        private string _databaseUser = "";
+        public string DatabaseUser
+        {
+            get => _databaseUser;
+            set => SetProperty(ref _databaseUser, value);
+        }
+
+        private string _databasePassword = "";
+        public string DatabasePassword
+        {
+            get => _databasePassword;
+            set => SetProperty(ref _databasePassword, value);
+        }
+
+        private bool _isDatabaseConnected = false;
+        public bool IsDatabaseConnected
+        {
+            get => _isDatabaseConnected;
+            set => SetProperty(ref _isDatabaseConnected, value);
+        }
+
+        // Image Retrieval Properties
+        private string _recordingEndpoint = "Rotterdam360\\\\Ladybug5plus";
+        public string RecordingEndpoint
+        {
+            get => _recordingEndpoint;
+            set => SetProperty(ref _recordingEndpoint, value);
+        }
+
+        private string _horusClientUrl = "http://10.0.10.100:5050/web/";
+        public string HorusClientUrl
+        {
+            get => _horusClientUrl;
+            set => SetProperty(ref _horusClientUrl, value);
+        }
+
+        private int _defaultNumberOfImages = 5;
+        public int DefaultNumberOfImages
+        {
+            get => _defaultNumberOfImages;
+            set => SetProperty(ref _defaultNumberOfImages, value);
+        }
+
+        private int _defaultImageWidth = 600;
+        public int DefaultImageWidth
+        {
+            get => _defaultImageWidth;
+            set => SetProperty(ref _defaultImageWidth, value);
+        }
+
+        private int _defaultImageHeight = 600;
+        public int DefaultImageHeight
+        {
+            get => _defaultImageHeight;
+            set => SetProperty(ref _defaultImageHeight, value);
+        }
+
+        public bool IsSettingsOpen
+        {
+            get => _isSettingsOpen;
+            set => SetProperty(ref _isSettingsOpen, value);
+        }
+
+        public List<HorusRecording> HorusRecordings
+        {
+            get => _horusRecordings;
+            set => SetProperty(ref _horusRecordings, value);
+        }
+
+        public HorusRecording SelectedRecording
+        {
+            get => _selectedRecording;
+            set => SetProperty(ref _selectedRecording, value);
+        }
+
+        private bool _isHorusConnected = false;
+        public bool IsHorusConnected
+        {
+            get => _isHorusConnected;
+            set => SetProperty(ref _isHorusConnected, value);
+        }
+
+        private string _heading = "Spherical Image Viewer";
+        public string Heading
+        {
+            get => _heading;
+            set => SetProperty(ref _heading, value);
+        }
+        #endregion
+
+        #region Commands
+        public ICommand ConnectCommand { get; private set; }
+        public ICommand DisconnectCommand { get; private set; }
+        public ICommand LoadImagesCommand { get; private set; }
+        public ICommand RefreshCommand { get; private set; }
+        public ICommand RunDetectionCommand { get; private set; }
+        public ICommand ResetViewCommand { get; private set; }
+        public ICommand PreviousFrameCommand { get; private set; }
+        public ICommand NextFrameCommand { get; private set; }
+        public ICommand FirstFrameCommand { get; private set; }
+        public ICommand LastFrameCommand { get; private set; }
+        public ICommand OpenSettingsCommand { get; private set; }
+        public ICommand CloseSettingsCommand { get; private set; }
+        public ICommand SaveSettingsCommand { get; private set; }
+        public ICommand ResetSettingsCommand { get; private set; }
+        public ICommand TestConnectionCommand { get; private set; }
+        public ICommand TestDatabaseConnectionCommand { get; private set; }
+        public ICommand BrowseDirectoryCommand { get; private set; }
+
+        public ICommand ConnectHorusCommand { get; private set; }
+        public ICommand DisconnectHorusCommand { get; private set; }
+        public ICommand LoadHorusRecordingsCommand { get; private set; }
+        public ICommand LoadHorusImagesCommand { get; private set; }
+        public ICommand StartPythonBridgeCommand { get; private set; }
+        public ICommand TestHorusConnectionCommand { get; private set; }
+        #endregion
+
+        #region Constructor and Initialization
+        

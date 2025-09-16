@@ -34,6 +34,13 @@
             Open the spherical camera image viewer with AI detection capabilities
           </tooltip>
         </button>
+        <tool id="Test_Wfs_SelectTool"
+              caption="Select WFS Points"
+              className="Test.Tools.MapSelectionTool"
+              toolTip="Click on the map to select Horus WFS points"
+              loadOnClick="true"
+              smallImage="Images\AddinDesktop16.png"
+              largeImage="Images\AddinDesktop32.png" />
       </controls>
 
       <dockPanes>

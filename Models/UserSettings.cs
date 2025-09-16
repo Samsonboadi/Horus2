@@ -43,5 +43,14 @@ namespace Test.Models
         public string Theme { get; set; } = "Light";
         public bool RememberWindowSize { get; set; } = true;
         public bool AutoConnect { get; set; } = false;
+        public bool AutoRefreshWfsOnViewChange { get; set; } = true;
+        public bool ClearWfsBeforeLoad { get; set; } = true;
+        public bool ForceWebMercator { get; set; } = true;
+        public int WfsMaxFeatures { get; set; } = 1000;
+        public bool RequireMinZoomForWfs { get; set; } = true;
+        public double MinWfsViewWidthDegrees { get; set; } = 0.5; // Require zoom-in below ~0.5° width
+        public int ImageSectionCount { get; set; } = 32;
+        public int DefaultImageScale { get; set; } = 2;
+        public int PreferredSectionIndex { get; set; } = 20;
     }
 }

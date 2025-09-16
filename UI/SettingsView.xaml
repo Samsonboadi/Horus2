@@ -1,4 +1,4 @@
-﻿<UserControl x:Class="Test.UI.SettingsView"
+<UserControl x:Class="Test.UI.SettingsView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
@@ -186,6 +186,7 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
                         <!-- Server URL -->
@@ -304,6 +305,53 @@
                                      IsReadOnly="True"
                                      Background="{StaticResource EsriBackground}"
                                      TextAlignment="Center"/>
+                        </Grid>
+                    </Grid>
+                </GroupBox>
+
+                <!-- Section-Based Viewer Preferences -->
+                <GroupBox Header="Section-Based Viewer" Style="{StaticResource EsriGroupBox}">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <!-- Section Count -->
+                        <Grid Grid.Row="0" Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="220"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="100"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Section count:" Style="{StaticResource EsriLabel}" VerticalAlignment="Center"/>
+                            <Slider Grid.Column="1" Minimum="1" Maximum="64" Value="{Binding SectionCount}" TickFrequency="1" IsSnapToTickEnabled="True" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <TextBox Grid.Column="2" Text="{Binding SectionCount}" Style="{StaticResource EsriTextBox}" IsReadOnly="True" Background="{StaticResource EsriBackground}" TextAlignment="Center"/>
+                        </Grid>
+
+                        <!-- Preferred Section -->
+                        <Grid Grid.Row="1" Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="220"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="100"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Preferred section:" Style="{StaticResource EsriLabel}" VerticalAlignment="Center"/>
+                            <Slider Grid.Column="1" Minimum="0" Maximum="64" Value="{Binding PreferredSectionIndex}" TickFrequency="1" IsSnapToTickEnabled="True" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <TextBox Grid.Column="2" Text="{Binding PreferredSectionIndex}" Style="{StaticResource EsriTextBox}" IsReadOnly="True" Background="{StaticResource EsriBackground}" TextAlignment="Center"/>
+                        </Grid>
+
+                        <!-- Default Image Scale -->
+                        <Grid Grid.Row="2">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="220"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="100"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Default image scale:" Style="{StaticResource EsriLabel}" VerticalAlignment="Center"/>
+                            <Slider Grid.Column="1" Minimum="1" Maximum="6" Value="{Binding DefaultImageScale}" TickFrequency="1" IsSnapToTickEnabled="True" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <TextBox Grid.Column="2" Text="{Binding DefaultImageScale}" Style="{StaticResource EsriTextBox}" IsReadOnly="True" Background="{StaticResource EsriBackground}" TextAlignment="Center"/>
                         </Grid>
                     </Grid>
                 </GroupBox>
@@ -622,6 +670,7 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
                         <!-- Default Yaw -->
@@ -746,6 +795,7 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
                         <!-- Default Model -->
@@ -840,6 +890,63 @@
                                      IsReadOnly="True"
                                      Background="{StaticResource EsriBackground}"
                                      TextAlignment="Center"/>
+                        </Grid>
+                    </Grid>
+                </GroupBox>
+
+                <!-- WFS & Map Preferences -->
+                <GroupBox Header="WFS &amp; Map Preferences" Style="{StaticResource EsriGroupBox}">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <CheckBox Grid.Row="0"
+                                  Content="Auto-refresh WFS when map view changes"
+                                  IsChecked="{Binding AutoRefreshWfsOnViewChange}"
+                                  Style="{StaticResource EsriCheckBox}"/>
+
+                        <CheckBox Grid.Row="1"
+                                  Content="Clear WFS layer before loading"
+                                  IsChecked="{Binding ClearWfsBeforeLoad}"
+                                  Style="{StaticResource EsriCheckBox}"/>
+
+                        <CheckBox Grid.Row="2"
+                                  Content="Force map projection to Web Mercator (EPSG:3857)"
+                                  IsChecked="{Binding ForceWebMercator}"
+                                  Style="{StaticResource EsriCheckBox}"/>
+
+                        <Grid Grid.Row="3" Margin="0,8,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="220"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="100"/>
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Grid.Column="0" Text="WFS Max Features:" Style="{StaticResource EsriLabel}" VerticalAlignment="Center"/>
+                            <Slider Grid.Column="1" Minimum="100" Maximum="10000" Value="{Binding WfsMaxFeatures}" TickFrequency="100" IsSnapToTickEnabled="True" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <TextBox Grid.Column="2" Text="{Binding WfsMaxFeatures}" Style="{StaticResource EsriTextBox}" IsReadOnly="True" Background="{StaticResource EsriBackground}" TextAlignment="Center"/>
+                        </Grid>
+                        
+                        <Grid Grid.Row="4" Margin="0,8,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="220"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="150"/>
+                            </Grid.ColumnDefinitions>
+
+                            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                                <CheckBox IsChecked="{Binding RequireMinZoomForWfs}"
+                                          Style="{StaticResource EsriCheckBox}"/>
+                                <TextBlock Text="Require minimum zoom to load WFS" Margin="6,0,0,0"/>
+                            </StackPanel>
+
+                            <Slider Grid.Column="1" Minimum="0.05" Maximum="5.0" Value="{Binding MinWfsViewWidthDegrees}" TickFrequency="0.05" IsSnapToTickEnabled="True" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <TextBox Grid.Column="2" Text="{Binding MinWfsViewWidthDegrees, StringFormat='Min width: {0:F2}&#176;'}" Style="{StaticResource EsriTextBox}" IsReadOnly="True" Background="{StaticResource EsriBackground}"/>
                         </Grid>
                     </Grid>
                 </GroupBox>

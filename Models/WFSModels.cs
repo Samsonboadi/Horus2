@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using ArcGIS.Core.Geometry;
 
 namespace Test.Models
@@ -69,10 +70,14 @@ namespace Test.Models
 
         // Additional metadata
         [JsonProperty("section")]
-        public int Section { get; set; } = 0;
+        public int Section { get; set; } = -1; // -1 means not provided by server
 
         [JsonProperty("scale")]
         public int Scale { get; set; } = 2;
+
+        // Capture any additional JSON properties from the WFS to allow flexible mapping
+        [JsonExtensionData]
+        public IDictionary<string, JToken> AdditionalProperties { get; set; }
 
         // Computed properties
         public string DisplayName => !string.IsNullOrEmpty(Name) ? Name : $"Point {Guid?.Substring(0, 8)}";
@@ -123,9 +128,16 @@ namespace Test.Models
         public string TypeName { get; set; } = "main_layer";
         public string OutputFormat { get; set; } = "application/json; subtype=geojson";
         public string SrsName { get; set; } = "EPSG:4326";
-        public BoundingBox BoundingBox { get; set; }
+        public GeoBoundingBox BoundingBox { get; set; }
         public int? MaxFeatures { get; set; }
         public string Filter { get; set; }
+        // Optional GeoServer CQL filter (preferred for combining attribute + bbox)
+        public string CqlFilter { get; set; }
+        public string GeometryPropertyName { get; set; } = "geom";
+        // Axis order for coordinates in XML filter; GeoServer usually expects lon,lat for EPSG:4326
+        public bool UseLatLonOrder { get; set; } = false;
+        // Prefer simple bbox parameter; set true to force FES 2.0 XML filter instead
+        public bool UseXmlFesFilter { get; set; } = false;
 
         /// <summary>
         /// Generate WFS query URL
@@ -138,20 +150,32 @@ namespace Test.Models
                 $"service={Service}",
                 $"request={Request}",
                 $"version={Version}",
-                $"typename={TypeName}",
+                // WFS 2.0.0 prefers 'typeNames' (plural)
+                Version.StartsWith("2.") ? $"typenames={TypeName}" : $"typeName={TypeName}",
                 $"outputFormat={Uri.EscapeDataString(OutputFormat)}",
                 $"srsname={SrsName}"
             };
 
-            if (BoundingBox != null)
+            // Only include bbox param if we are not already embedding a BBOX in CQL/Filter
+            if (BoundingBox != null && string.IsNullOrEmpty(CqlFilter))
             {
-                var bboxFilter = BuildBBoxFilter();
-                parameters.Add($"filter={Uri.EscapeDataString(bboxFilter)}");
+                if (UseXmlFesFilter)
+                {
+                    var bboxFilter = BuildFesBboxFilter();
+                    parameters.Add($"filter={Uri.EscapeDataString(bboxFilter)}");
+                }
+                else
+                {
+                    // Simple bbox param: minx,miny,maxx,maxy,CRS
+                    var bbox = $"{BoundingBox.MinX},{BoundingBox.MinY},{BoundingBox.MaxX},{BoundingBox.MaxY},{SrsName}";
+                    parameters.Add($"bbox={bbox}");
+                }
             }
 
             if (MaxFeatures.HasValue)
             {
-                parameters.Add($"maxFeatures={MaxFeatures.Value}");
+                // WFS 2.0 uses 'count'; 1.1.0 uses 'maxFeatures'
+                parameters.Add(Version.StartsWith("2.") ? $"count={MaxFeatures.Value}" : $"maxFeatures={MaxFeatures.Value}");
             }
 
             if (!string.IsNullOrEmpty(Filter))
@@ -159,40 +183,63 @@ namespace Test.Models
                 parameters.Add($"filter={Uri.EscapeDataString(Filter)}");
             }
 
+            if (!string.IsNullOrEmpty(CqlFilter))
+            {
+                parameters.Add($"cql_filter={Uri.EscapeDataString(CqlFilter)}");
+            }
+
             return $"{url}?{string.Join("&", parameters)}";
         }
 
         /// <summary>
-        /// Build BBOX filter for WFS query
+        /// Build FES 2.0 + GML 3.2 BBOX filter (lon,lat order for EPSG:4326)
         /// </summary>
-        private string BuildBBoxFilter()
+        private string BuildFesBboxFilter()
         {
             if (BoundingBox == null) return string.Empty;
 
-            return $@"<Filter>
-                <BBOX>
-                    <PropertyName>geom</PropertyName>
-                    <Box srsName=""{SrsName}"">
-                        <coordinates>{BoundingBox.MinX},{BoundingBox.MinY} {BoundingBox.MaxX},{BoundingBox.MaxY}</coordinates>
-                    </Box>
-                </BBOX>
-            </Filter>";
+            // lon,lat order for EPSG:4326 unless overridden
+            double minx = BoundingBox.MinX; // lon
+            double miny = BoundingBox.MinY; // lat
+            double maxx = BoundingBox.MaxX; // lon
+            double maxy = BoundingBox.MaxY; // lat
+
+            if (UseLatLonOrder)
+            {
+                // swap if lat,lon desired
+                (minx, miny) = (miny, minx);
+                (maxx, maxy) = (maxy, maxx);
+            }
+
+            var srs = SrsName.Equals("EPSG:4326", StringComparison.OrdinalIgnoreCase)
+                ? "urn:ogc:def:crs:EPSG::4326"
+                : SrsName;
+
+            return $@"<fes:Filter xmlns:fes=""http://www.opengis.net/fes/2.0"" xmlns:gml=""http://www.opengis.net/gml/3.2"">
+  <fes:BBOX>
+    <fes:ValueReference>{GeometryPropertyName}</fes:ValueReference>
+    <gml:Envelope srsName=""{srs}"">
+      <gml:lowerCorner>{minx} {miny}</gml:lowerCorner>
+      <gml:upperCorner>{maxx} {maxy}</gml:upperCorner>
+    </gml:Envelope>
+  </fes:BBOX>
+</fes:Filter>";
         }
     }
 
     /// <summary>
     /// Bounding box for spatial queries
     /// </summary>
-    public class BoundingBox
+    public class GeoBoundingBox
     {
         public double MinX { get; set; }
         public double MinY { get; set; }
         public double MaxX { get; set; }
         public double MaxY { get; set; }
 
-        public BoundingBox() { }
+        public GeoBoundingBox() { }
 
-        public BoundingBox(double minX, double minY, double maxX, double maxY)
+        public GeoBoundingBox(double minX, double minY, double maxX, double maxY)
         {
             MinX = minX;
             MinY = minY;
@@ -200,7 +247,7 @@ namespace Test.Models
             MaxY = maxY;
         }
 
-        public BoundingBox(Envelope envelope)
+        public GeoBoundingBox(Envelope envelope)
         {
             MinX = envelope.XMin;
             MinY = envelope.YMin;
@@ -222,7 +269,7 @@ namespace Test.Models
     /// <summary>
     /// Image request parameters for Horus image server
     /// </summary>
-    public class HorusImageRequest
+    public class HorusImageUrlRequest
     {
         public string RecordingId { get; set; }
         public string Guid { get; set; }

@@ -115,7 +115,7 @@ namespace Test.ViewModels
                 // Update command states
                 if (Application.Current?.Dispatcher != null)
                 {
-                    Application.Current.Dispatcher.BeginInvoke(new Action(() =>
+                    _ = Application.Current.Dispatcher.BeginInvoke(new Action(() =>
                         CommandManager.InvalidateRequerySuggested()));
                 }
 
@@ -128,7 +128,7 @@ namespace Test.ViewModels
                 // Show error to user in a safe way
                 if (Application.Current?.Dispatcher != null)
                 {
-                    Application.Current.Dispatcher.BeginInvoke(new Action(() =>
+                    _ = Application.Current.Dispatcher.BeginInvoke(new Action(() =>
                     {
                         try
                         {
@@ -151,7 +151,7 @@ namespace Test.ViewModels
                 // Update command states
                 if (Application.Current?.Dispatcher != null)
                 {
-                    Application.Current.Dispatcher.BeginInvoke(new Action(() =>
+                    _ = Application.Current.Dispatcher.BeginInvoke(new Action(() =>
                         CommandManager.InvalidateRequerySuggested()));
                 }
             }

@@ -47,7 +47,7 @@ namespace Test.Services
                 };
             }
 
-            var imageRequest = new HorusImageRequest
+            var imageRequest = new HorusImageUrlRequest
             {
                 RecordingId = feature.Properties.RecordingId,
                 Guid = feature.Properties.Guid,
@@ -66,7 +66,7 @@ namespace Test.Services
         /// <summary>
         /// Get image with specific camera parameters
         /// </summary>
-        public async Task<ApiResponse<BitmapSource>> GetImageAsync(HorusImageRequest request)
+        public async Task<ApiResponse<BitmapSource>> GetImageAsync(HorusImageUrlRequest request)
         {
             try
             {
@@ -177,6 +177,58 @@ namespace Test.Services
         }
 
         /// <summary>
+        /// Fetch an image directly from a prebuilt URL.
+        /// </summary>
+        public async Task<ApiResponse<BitmapSource>> GetImageByUrlAsync(string imageUrl)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(imageUrl))
+                {
+                    return new ApiResponse<BitmapSource>
+                    {
+                        Success = false,
+                        Error = "Image URL is empty"
+                    };
+                }
+
+                Debug.WriteLine($"Fetching image from URL: {imageUrl}");
+                var response = await _httpClient.GetAsync(imageUrl);
+                if (response.IsSuccessStatusCode)
+                {
+                    var imageBytes = await response.Content.ReadAsByteArrayAsync();
+                    var bitmapImage = CreateBitmapFromBytes(imageBytes);
+                    return new ApiResponse<BitmapSource>
+                    {
+                        Success = bitmapImage != null,
+                        Data = bitmapImage,
+                        Error = bitmapImage == null ? "Failed to decode image" : null,
+                        Message = bitmapImage != null ? "Image retrieved successfully" : null
+                    };
+                }
+                else
+                {
+                    var errorContent = await response.Content.ReadAsStringAsync();
+                    Debug.WriteLine($"Image URL request failed {response.StatusCode}: {errorContent}");
+                    return new ApiResponse<BitmapSource>
+                    {
+                        Success = false,
+                        Error = $"HTTP {(int)response.StatusCode} {response.ReasonPhrase}"
+                    };
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"GetImageByUrlAsync failed: {ex}");
+                return new ApiResponse<BitmapSource>
+                {
+                    Success = false,
+                    Error = $"Failed to get image: {ex.Message}"
+                };
+            }
+        }
+
+        /// <summary>
         /// Get multiple images for batch processing
         /// </summary>
         public async Task<List<ApiResponse<BitmapSource>>> GetMultipleImagesAsync(List<WfsFeature> features, double? yaw = null, double? pitch = null, double? roll = null, double? fov = null)
@@ -262,7 +314,7 @@ namespace Test.Services
 
         #region Private Helper Methods
 
-        private string GenerateCacheKey(HorusImageRequest request)
+        private string GenerateCacheKey(HorusImageUrlRequest request)
         {
             return $"{request.RecordingId}_{request.Guid}_{request.Scale}_{request.Section}_{request.Yaw}_{request.Pitch}_{request.Roll}_{request.Fov}_{request.Mode}";
         }

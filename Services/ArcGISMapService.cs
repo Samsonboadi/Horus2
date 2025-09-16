@@ -26,6 +26,7 @@ namespace Test.Services
         private FeatureLayer _selectedPointsLayer;
         private FeatureLayer _aiResultsLayer;
         private Map _activeMap;
+        public bool ForceWebMercator { get; set; } = true;
 
         /// <summary>
         /// Initialize the map service and create necessary layers
@@ -41,6 +42,24 @@ namespace Test.Services
                     {
                         Debug.WriteLine("No active map found");
                         return false;
+                    }
+
+                    if (ForceWebMercator)
+                    {
+                        // Ensure map uses Web Mercator (to avoid distortion with common basemaps)
+                        try
+                        {
+                            var wm = SpatialReferenceBuilder.CreateSpatialReference(3857);
+                            if (_activeMap.SpatialReference == null || _activeMap.SpatialReference.Wkid != 3857)
+                            {
+                                _activeMap.SetSpatialReference(wm);
+                                Debug.WriteLine("Map spatial reference set to Web Mercator (EPSG:3857)");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Debug.WriteLine($"Failed to set map spatial reference: {ex}");
+                        }
                     }
 
                     // Create or get WFS points layer
@@ -89,54 +108,47 @@ namespace Test.Services
                         return false;
                     }
 
-                    using (var rowBuffer = featureClass.CreateRowBuffer())
+                    var editOperation = new EditOperation()
                     {
-                        var editOperation = new EditOperation()
-                        {
-                            Name = "Add WFS Points",
-                            SelectNewFeatures = false
-                        };
+                        Name = "Add WFS Points",
+                        SelectNewFeatures = false
+                    };
 
-                        foreach (var feature in features)
+                    foreach (var feature in features)
+                    {
+                        if (feature.MapPoint == null) continue;
+
+                        editOperation.Callback(context =>
                         {
-                            try
+                            using (var rb = featureClass.CreateRowBuffer())
                             {
-                                if (feature.MapPoint == null) continue;
+                                rb["Shape"] = feature.MapPoint;
+                                SetAttributeValue(rb, "FeatureId", feature.Id);
+                                SetAttributeValue(rb, "RecordingId", feature.Properties?.RecordingId);
+                                SetAttributeValue(rb, "Guid", feature.Properties?.Guid);
+                                SetAttributeValue(rb, "Name", feature.Properties?.DisplayName);
+                                SetAttributeValue(rb, "ImageUrl", feature.ImageUrl);
+                                SetAttributeValue(rb, "Timestamp", feature.Properties?.Timestamp);
+                                SetAttributeValue(rb, "IsSelected", feature.IsSelected ? 1 : 0);
 
-                                // Clear the row buffer for reuse
-                                rowBuffer.ClearValues();
-
-                                // Set geometry
-                                rowBuffer["Shape"] = feature.MapPoint;
-
-                                // Set attributes
-                                SetAttributeValue(rowBuffer, "FeatureId", feature.Id);
-                                SetAttributeValue(rowBuffer, "RecordingId", feature.Properties?.RecordingId);
-                                SetAttributeValue(rowBuffer, "Guid", feature.Properties?.Guid);
-                                SetAttributeValue(rowBuffer, "Name", feature.Properties?.DisplayName);
-                                SetAttributeValue(rowBuffer, "ImageUrl", feature.ImageUrl);
-                                SetAttributeValue(rowBuffer, "Timestamp", feature.Properties?.Timestamp);
-                                SetAttributeValue(rowBuffer, "IsSelected", feature.IsSelected ? 1 : 0);
-
-                                editOperation.Create(_wfsPointsLayer, rowBuffer);
+                                using (var row = featureClass.CreateRow(rb))
+                                {
+                                    context.Invalidate(row);
+                                }
                             }
-                            catch (Exception ex)
-                            {
-                                Debug.WriteLine($"Failed to add feature {feature.Id}: {ex.Message}");
-                            }
-                        }
+                        }, featureClass);
+                    }
 
-                        var result = await editOperation.ExecuteAsync();
-                        if (result)
-                        {
-                            Debug.WriteLine($"Successfully added {features.Count} WFS features to map");
-                            return true;
-                        }
-                        else
-                        {
-                            Debug.WriteLine($"Failed to add WFS features: {editOperation.ErrorMessage}");
-                            return false;
-                        }
+                    var result = await editOperation.ExecuteAsync();
+                    if (result)
+                    {
+                        Debug.WriteLine($"Successfully added {features.Count} WFS features to map");
+                        return true;
+                    }
+                    else
+                    {
+                        Debug.WriteLine($"Failed to add WFS features: {editOperation.ErrorMessage}");
+                        return false;
                     }
                 });
             }
@@ -159,19 +171,13 @@ namespace Test.Services
                     if (_selectedPointsLayer?.GetTable() is not FeatureClass selectedFeatureClass)
                         return;
 
-                    // Clear existing selected points
-                    var clearOperation = new EditOperation()
+                    // Clear existing selected points (delete all)
+                    var clearOperation = new EditOperation() { Name = "Clear Selected Points" };
+                    clearOperation.Callback(ctx =>
                     {
-                        Name = "Clear Selected Points"
-                    };
-
-                    var cursor = selectedFeatureClass.Search();
-                    while (cursor.MoveNext())
-                    {
-                        clearOperation.Delete(cursor.Current);
-                    }
-                    cursor.Dispose();
-
+                        selectedFeatureClass.DeleteRows(new QueryFilter());
+                        ctx.Invalidate(selectedFeatureClass);
+                    }, selectedFeatureClass);
                     await clearOperation.ExecuteAsync();
 
                     // Add currently selected points
@@ -182,22 +188,27 @@ namespace Test.Services
                             Name = "Update Selected Points"
                         };
 
-                        using (var rowBuffer = selectedFeatureClass.CreateRowBuffer())
+                        foreach (var feature in selectedFeatures)
                         {
-                            foreach (var feature in selectedFeatures)
+                            if (feature.MapPoint == null) continue;
+
+                            addOperation.Callback(ctx =>
                             {
-                                if (feature.MapPoint == null) continue;
+                                using (var rb = selectedFeatureClass.CreateRowBuffer())
+                                {
+                                    rb["Shape"] = feature.MapPoint;
+                                    SetAttributeValue(rb, "FeatureId", feature.Id);
+                                    SetAttributeValue(rb, "RecordingId", feature.Properties?.RecordingId);
+                                    SetAttributeValue(rb, "Guid", feature.Properties?.Guid);
+                                    SetAttributeValue(rb, "Name", feature.Properties?.DisplayName);
+                                    SetAttributeValue(rb, "SelectionOrder", selectedFeatures.IndexOf(feature));
 
-                                rowBuffer.ClearValues();
-                                rowBuffer["Shape"] = feature.MapPoint;
-                                SetAttributeValue(rowBuffer, "FeatureId", feature.Id);
-                                SetAttributeValue(rowBuffer, "RecordingId", feature.Properties?.RecordingId);
-                                SetAttributeValue(rowBuffer, "Guid", feature.Properties?.Guid);
-                                SetAttributeValue(rowBuffer, "Name", feature.Properties?.DisplayName);
-                                SetAttributeValue(rowBuffer, "SelectionOrder", selectedFeatures.IndexOf(feature));
-
-                                addOperation.Create(_selectedPointsLayer, rowBuffer);
-                            }
+                                    using (var row = selectedFeatureClass.CreateRow(rb))
+                                    {
+                                        ctx.Invalidate(row);
+                                    }
+                                }
+                            }, selectedFeatureClass);
                         }
 
                         await addOperation.ExecuteAsync();
@@ -232,21 +243,26 @@ namespace Test.Services
                         Name = "Add AI Detection Results"
                     };
 
-                    using (var rowBuffer = aiFeatureClass.CreateRowBuffer())
+                    foreach (var det in results)
                     {
-                        foreach (var result in results)
+                        editOperation.Callback(ctx =>
                         {
-                            rowBuffer.ClearValues();
-                            rowBuffer["Shape"] = feature.MapPoint;
-                            SetAttributeValue(rowBuffer, "FeatureId", feature.Id);
-                            SetAttributeValue(rowBuffer, "ObjectName", result.ObjectName);
-                            SetAttributeValue(rowBuffer, "Confidence", result.Confidence);
-                            SetAttributeValue(rowBuffer, "ModelUsed", result.ModelUsed);
-                            SetAttributeValue(rowBuffer, "ProcessingTime", result.ProcessingTime);
-                            SetAttributeValue(rowBuffer, "DetectionTime", DateTime.Now);
+                            using (var rb = aiFeatureClass.CreateRowBuffer())
+                            {
+                                rb["Shape"] = feature.MapPoint;
+                                SetAttributeValue(rb, "FeatureId", feature.Id);
+                                SetAttributeValue(rb, "ObjectName", det.ObjectName);
+                                SetAttributeValue(rb, "Confidence", det.Confidence);
+                                SetAttributeValue(rb, "ModelUsed", det.ModelUsed);
+                                SetAttributeValue(rb, "ProcessingTime", det.ProcessingTime);
+                                SetAttributeValue(rb, "DetectionTime", DateTime.Now);
 
-                            editOperation.Create(_aiResultsLayer, rowBuffer);
-                        }
+                                using (var row = aiFeatureClass.CreateRow(rb))
+                                {
+                                    ctx.Invalidate(row);
+                                }
+                            }
+                        }, aiFeatureClass);
                     }
 
                     var success = await editOperation.ExecuteAsync();
@@ -290,11 +306,12 @@ namespace Test.Services
                     }
                     else
                     {
-                        // Create envelope around all points
+                        // Create envelope around all points using multipoint extent
                         var points = features.Where(f => f.MapPoint != null).Select(f => f.MapPoint).ToList();
                         if (points.Count > 0)
                         {
-                            var envelope = GeometryEngine.Instance.CombineExtents(points);
+                            var multipoint = MultipointBuilderEx.CreateMultipoint(points);
+                            var envelope = multipoint.Extent;
                             var expandedEnvelope = GeometryEngine.Instance.Expand(envelope, 1.2, 1.2, true);
                             mapView.ZoomToAsync(expandedEnvelope);
                         }
@@ -322,21 +339,15 @@ namespace Test.Services
 
                     foreach (var layer in layers.Where(l => l != null))
                     {
-                        if (layer.GetTable() is FeatureClass featureClass)
+                        if (layer.GetTable() is FeatureClass fc)
                         {
-                            var editOperation = new EditOperation()
+                            var op = new EditOperation() { Name = $"Clear {layer.Name}" };
+                            op.Callback(ctx =>
                             {
-                                Name = $"Clear {layer.Name}"
-                            };
-
-                            var cursor = featureClass.Search();
-                            while (cursor.MoveNext())
-                            {
-                                editOperation.Delete(cursor.Current);
-                            }
-                            cursor.Dispose();
-
-                            await editOperation.ExecuteAsync();
+                                fc.DeleteRows(new QueryFilter());
+                                ctx.Invalidate(fc);
+                            }, fc);
+                            await op.ExecuteAsync();
                         }
                     }
 
@@ -346,6 +357,34 @@ namespace Test.Services
             catch (Exception ex)
             {
                 Debug.WriteLine($"Error clearing WFS features: {ex}");
+            }
+        }
+
+        /// <summary>
+        /// Clear only the WFS points layer (leave selection/AI layers intact)
+        /// </summary>
+        public async Task ClearWfsPointsLayerAsync()
+        {
+            try
+            {
+                await QueuedTask.Run(async () =>
+                {
+                    if (_wfsPointsLayer?.GetTable() is FeatureClass fc)
+                    {
+                        var op = new EditOperation() { Name = "Clear WFS Points" };
+                        op.Callback(ctx =>
+                        {
+                            fc.DeleteRows(new QueryFilter());
+                            ctx.Invalidate(fc);
+                        }, fc);
+                        await op.ExecuteAsync();
+                        Debug.WriteLine("Cleared WFS points layer");
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error clearing WFS points layer: {ex}");
             }
         }
 
@@ -383,7 +422,12 @@ namespace Test.Services
                     if (_wfsPointsLayer?.GetTable() is not FeatureClass featureClass)
                         return results;
 
-                    var searchGeometry = GeometryEngine.Instance.Buffer(clickPoint, toleranceMeters);
+                    // Build a buffer of toleranceMeters using planar buffer in Web Mercator, then project back to WGS84
+                    var wm = SpatialReferenceBuilder.CreateSpatialReference(3857);
+                    var wgs84 = SpatialReferenceBuilder.CreateSpatialReference(4326);
+                    var clickWm = (MapPoint)GeometryEngine.Instance.Project(clickPoint, wm);
+                    var bufferWm = GeometryEngine.Instance.Buffer(clickWm, toleranceMeters);
+                    var searchGeometry = GeometryEngine.Instance.Project(bufferWm, wgs84);
                     var spatialFilter = new SpatialQueryFilter()
                     {
                         FilterGeometry = searchGeometry,
@@ -404,6 +448,19 @@ namespace Test.Services
                             }
                         }
                     }
+
+                    // Sort by geodesic distance to click point so [0] is the nearest
+                    try
+                    {
+                        results = results
+                            .OrderBy(f =>
+                            {
+                                var fp = (MapPoint)GeometryEngine.Instance.Project(f.MapPoint, wm);
+                                return GeometryEngine.Instance.Distance(clickWm, fp);
+                            })
+                            .ToList();
+                    }
+                    catch { }
 
                     Debug.WriteLine($"Found {results.Count} features near click point");
                     return results;
@@ -445,20 +502,19 @@ namespace Test.Services
             return await CreateInMemoryFeatureLayerAsync(AI_RESULTS_LAYER_NAME, CreateAiResultsSchema(), GetAiResultsSymbol());
         }
 
-        private async Task<FeatureLayer> CreateInMemoryFeatureLayerAsync(string layerName, List<Field> fields, CIMSymbol symbol)
+        private Task<FeatureLayer> CreateInMemoryFeatureLayerAsync(string layerName, System.Collections.Generic.IEnumerable<ArcGIS.Core.Data.DDL.FieldDescription> fields, CIMSymbolReference symbol)
         {
             try
             {
                 var featureClassDescription = new FeatureClassDescription(layerName, fields,
                     new ShapeDescription(GeometryType.Point, SpatialReferenceBuilder.CreateSpatialReference(4326)));
 
-                var schemaBuilder = new SchemaBuilder(MemoryConnectionProperties.ConstructMemoryConnectionProperties());
+                var memConn = new MemoryConnectionProperties();
+                var geodatabase = new Geodatabase(memConn);
+                var schemaBuilder = new SchemaBuilder(geodatabase);
                 schemaBuilder.Create(featureClassDescription);
                 schemaBuilder.Build();
-
-                var memoryConnectionProperties = MemoryConnectionProperties.ConstructMemoryConnectionProperties();
-                var geodatabase = await Geodatabase.OpenAsync(memoryConnectionProperties);
-                var featureClass = await geodatabase.OpenDatasetAsync<FeatureClass>(layerName);
+                var featureClass = geodatabase.OpenDataset<FeatureClass>(layerName);
 
                 var layerParams = new FeatureLayerCreationParams(featureClass)
                 {
@@ -477,76 +533,67 @@ namespace Test.Services
                 }
 
                 Debug.WriteLine($"Created in-memory layer: {layerName}");
-                return featureLayer;
+                return Task.FromResult(featureLayer);
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"Failed to create layer {layerName}: {ex}");
-                return null;
+                return Task.FromResult<FeatureLayer>(null);
             }
         }
 
-        private List<Field> CreateWfsPointsSchema()
+        private System.Collections.Generic.List<ArcGIS.Core.Data.DDL.FieldDescription> CreateWfsPointsSchema()
         {
-            return new List<Field>
-            {
-                FieldDescription.CreateOIDField(),
-                FieldDescription.CreateShapeField(),
-                FieldDescription.CreateStringField("FeatureId", 100),
-                FieldDescription.CreateStringField("RecordingId", 50),
-                FieldDescription.CreateStringField("Guid", 50),
-                FieldDescription.CreateStringField("Name", 200),
-                FieldDescription.CreateStringField("ImageUrl", 500),
-                FieldDescription.CreateDateField("Timestamp"),
-                FieldDescription.CreateIntegerField("IsSelected")
-            };
+            var fields = new List<ArcGIS.Core.Data.DDL.FieldDescription>();
+            fields.Add(new ArcGIS.Core.Data.DDL.FieldDescription("FeatureId", FieldType.String) { Length = 100 });
+            fields.Add(new ArcGIS.Core.Data.DDL.FieldDescription("RecordingId", FieldType.String) { Length = 50 });
+            fields.Add(new ArcGIS.Core.Data.DDL.FieldDescription("Guid", FieldType.String) { Length = 50 });
+            fields.Add(new ArcGIS.Core.Data.DDL.FieldDescription("Name", FieldType.String) { Length = 200 });
+            fields.Add(new ArcGIS.Core.Data.DDL.FieldDescription("ImageUrl", FieldType.String) { Length = 500 });
+            fields.Add(new ArcGIS.Core.Data.DDL.FieldDescription("Timestamp", FieldType.Date));
+            fields.Add(new ArcGIS.Core.Data.DDL.FieldDescription("IsSelected", FieldType.Integer));
+            return fields;
         }
 
-        private List<Field> CreateSelectedPointsSchema()
+        private System.Collections.Generic.List<ArcGIS.Core.Data.DDL.FieldDescription> CreateSelectedPointsSchema()
         {
-            return new List<Field>
-            {
-                FieldDescription.CreateOIDField(),
-                FieldDescription.CreateShapeField(),
-                FieldDescription.CreateStringField("FeatureId", 100),
-                FieldDescription.CreateStringField("RecordingId", 50),
-                FieldDescription.CreateStringField("Guid", 50),
-                FieldDescription.CreateStringField("Name", 200),
-                FieldDescription.CreateIntegerField("SelectionOrder")
-            };
+            var fields = new List<ArcGIS.Core.Data.DDL.FieldDescription>();
+            fields.Add(new ArcGIS.Core.Data.DDL.FieldDescription("FeatureId", FieldType.String) { Length = 100 });
+            fields.Add(new ArcGIS.Core.Data.DDL.FieldDescription("RecordingId", FieldType.String) { Length = 50 });
+            fields.Add(new ArcGIS.Core.Data.DDL.FieldDescription("Guid", FieldType.String) { Length = 50 });
+            fields.Add(new ArcGIS.Core.Data.DDL.FieldDescription("Name", FieldType.String) { Length = 200 });
+            fields.Add(new ArcGIS.Core.Data.DDL.FieldDescription("SelectionOrder", FieldType.Integer));
+            return fields;
         }
 
-        private List<Field> CreateAiResultsSchema()
+        private System.Collections.Generic.List<ArcGIS.Core.Data.DDL.FieldDescription> CreateAiResultsSchema()
         {
-            return new List<Field>
-            {
-                FieldDescription.CreateOIDField(),
-                FieldDescription.CreateShapeField(),
-                FieldDescription.CreateStringField("FeatureId", 100),
-                FieldDescription.CreateStringField("ObjectName", 100),
-                FieldDescription.CreateDoubleField("Confidence"),
-                FieldDescription.CreateStringField("ModelUsed", 100),
-                FieldDescription.CreateDoubleField("ProcessingTime"),
-                FieldDescription.CreateDateField("DetectionTime")
-            };
+            var fields = new List<ArcGIS.Core.Data.DDL.FieldDescription>();
+            fields.Add(new ArcGIS.Core.Data.DDL.FieldDescription("FeatureId", FieldType.String) { Length = 100 });
+            fields.Add(new ArcGIS.Core.Data.DDL.FieldDescription("ObjectName", FieldType.String) { Length = 100 });
+            fields.Add(new ArcGIS.Core.Data.DDL.FieldDescription("Confidence", FieldType.Double));
+            fields.Add(new ArcGIS.Core.Data.DDL.FieldDescription("ModelUsed", FieldType.String) { Length = 100 });
+            fields.Add(new ArcGIS.Core.Data.DDL.FieldDescription("ProcessingTime", FieldType.Double));
+            fields.Add(new ArcGIS.Core.Data.DDL.FieldDescription("DetectionTime", FieldType.Date));
+            return fields;
         }
 
-        private CIMSymbol GetWfsPointsSymbol()
+        private CIMSymbolReference GetWfsPointsSymbol()
         {
             return SymbolFactory.Instance.ConstructPointSymbol(
-                ColorFactory.Instance.BlueRGB, 8, SimpleMarkerStyle.Circle);
+                ColorFactory.Instance.BlueRGB, 8, SimpleMarkerStyle.Circle).MakeSymbolReference();
         }
 
-        private CIMSymbol GetSelectedPointsSymbol()
+        private CIMSymbolReference GetSelectedPointsSymbol()
         {
             return SymbolFactory.Instance.ConstructPointSymbol(
-                ColorFactory.Instance.RedRGB, 12, SimpleMarkerStyle.Circle);
+                ColorFactory.Instance.RedRGB, 12, SimpleMarkerStyle.Circle).MakeSymbolReference();
         }
 
-        private CIMSymbol GetAiResultsSymbol()
+        private CIMSymbolReference GetAiResultsSymbol()
         {
             return SymbolFactory.Instance.ConstructPointSymbol(
-                ColorFactory.Instance.GreenRGB, 6, SimpleMarkerStyle.Diamond);
+                ColorFactory.Instance.GreenRGB, 6, SimpleMarkerStyle.Diamond).MakeSymbolReference();
         }
 
         private void SetAttributeValue(RowBuffer rowBuffer, string fieldName, object value)

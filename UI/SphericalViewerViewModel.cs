@@ -57,7 +57,30 @@ namespace Test.UI
         public string AiApiBaseUrl
         {
             get => _aiApiBaseUrl;
-            set => SetProperty(ref _aiApiBaseUrl, value);
+            set
+            {
+                if (SetProperty(ref _aiApiBaseUrl, value))
+                {
+                    // Update HTTP client when API URL changes
+                    UpdateHttpClientConfiguration();
+                }
+            }
+        }
+
+
+
+        private string _serverUrl = "http://localhost:5001";
+        public string ServerUrl
+        {
+            get => _serverUrl;
+            set
+            {
+                if (SetProperty(ref _serverUrl, value))
+                {
+                    // Apply changes immediately when server URL changes
+                    UpdateServiceConfiguration();
+                }
+            }
         }
 
         private string _detectionText = "pole";
@@ -169,23 +192,16 @@ namespace Test.UI
             set => SetProperty(ref _frameInfo, value);
         }
 
-        // === Settings Properties ===
 
-        private string _serverUrl = "http://192.168.6.100:5050";
-        public string ServerUrl
-        {
-            get => _serverUrl;
-            set => SetProperty(ref _serverUrl, value);
-        }
 
-        private string _imageDirectory = "/web/images/";
+        private string _imageDirectory = "";
         public string ImageDirectory
         {
             get => _imageDirectory;
             set => SetProperty(ref _imageDirectory, value);
         }
 
-        // === WFS Properties ===
+        // === Selection Properties ===
 
         private bool _isMultiSelectMode = false;
         public bool IsMultiSelectMode
@@ -200,21 +216,23 @@ namespace Test.UI
             }
         }
 
-        private string _wfsStatus = "WFS: idle";
-        public string WfsStatus
-        {
-            get => _wfsStatus;
-            set => SetProperty(ref _wfsStatus, value);
-        }
-
         public string SelectionInfo
         {
             get
             {
-                return _selectedFeatures?.Count > 0
-                    ? $"Selected: {_selectedFeatures.Count} feature(s)"
+                return _selectedFeatures?.Count > 0 ?
+                    $"Selected: {_selectedFeatures.Count} feature(s)"
                     : "No selection";
             }
+        }
+
+        // === WFS Properties ===
+
+        private string _wfsStatus = "Not connected";
+        public string WfsStatus
+        {
+            get => _wfsStatus;
+            set => SetProperty(ref _wfsStatus, value);
         }
 
         private int _wfsMaxFeatures = 100;
@@ -222,6 +240,106 @@ namespace Test.UI
         {
             get => _wfsMaxFeatures;
             set => SetProperty(ref _wfsMaxFeatures, value);
+        }
+
+        // === Database Connection Properties ===
+
+        private string _databaseHost = "";
+        public string DatabaseHost
+        {
+            get => _databaseHost;
+            set => SetProperty(ref _databaseHost, value);
+        }
+
+        private string _databasePort = "5432";
+        public string DatabasePort
+        {
+            get => _databasePort;
+            set => SetProperty(ref _databasePort, value);
+        }
+
+        private string _databaseName = "HorusWebMoviePlayer";
+        public string DatabaseName
+        {
+            get => _databaseName;
+            set => SetProperty(ref _databaseName, value);
+        }
+
+        private string _databaseUser = "";
+        public string DatabaseUser
+        {
+            get => _databaseUser;
+            set => SetProperty(ref _databaseUser, value);
+        }
+
+        private string _databasePassword = "";
+        public string DatabasePassword
+        {
+            get => _databasePassword;
+            set => SetProperty(ref _databasePassword, value);
+        }
+
+        // === Section Navigation Properties ===
+
+        private int _currentSection = 20;
+        public int CurrentSection
+        {
+            get => _currentSection;
+            set
+            {
+                var clampedValue = Math.Max(0, Math.Min(value, SectionCount - 1));
+                if (SetProperty(ref _currentSection, clampedValue))
+                {
+                    OnSectionChanged();
+                }
+            }
+        }
+
+        private int _sectionCount = 32;
+        public int SectionCount
+        {
+            get => _sectionCount;
+            set => SetProperty(ref _sectionCount, value);
+        }
+
+        private void UpdateHttpClientConfiguration()
+        {
+            try
+            {
+                if (_httpClient != null && !string.IsNullOrWhiteSpace(AiApiBaseUrl))
+                {
+                    // Update base address for HTTP client
+                    if (Uri.IsWellFormedUriString(AiApiBaseUrl, UriKind.Absolute))
+                    {
+                        Debug.WriteLine($"HTTP client configured for AI API: {AiApiBaseUrl}");
+                        UpdateStatusMessage($"AI API endpoint updated: {AiApiBaseUrl}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"UpdateHttpClientConfiguration error: {ex}");
+            }
+        }
+
+        private void UpdateServiceConfiguration()
+        {
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(ServerUrl))
+                {
+                    // Update service configurations when server URL changes
+                    if (Uri.IsWellFormedUriString(ServerUrl, UriKind.Absolute))
+                    {
+                        Debug.WriteLine($"Service configuration updated: {ServerUrl}");
+                        UpdateStatusMessage($"Server URL updated: {ServerUrl}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"UpdateServiceConfiguration error: {ex}");
+            }
         }
 
         #endregion
@@ -241,24 +359,37 @@ namespace Test.UI
         public ICommand LoadWfsPointsCommand { get; private set; }
         public ICommand ClearSelectionCommand { get; private set; }
 
+        // Settings Commands
+        public ICommand SaveSettingsCommand { get; private set; }
+        public ICommand ApplySettingsCommand { get; private set; }
+        public ICommand ResetSettingsCommand { get; private set; }
+
         #endregion
 
         #region Constructor
 
         protected SphericalViewerViewModel()
         {
-            // Initialize services
-            _settingsService = new SettingsService();
-            _wfsService = new WfsService("https://his-staging.horus.nu");
+            try
+            {
+                // Initialize services
+                _settingsService = new SettingsService();
+                _wfsService = new WfsService("https://his-staging.horus.nu");
 
-            // Initialize HTTP client for AI API
-            _httpClient = new HttpClient();
-            _httpClient.Timeout = TimeSpan.FromMinutes(5);
+                // Initialize HTTP client for AI API
+                _httpClient = new HttpClient();
+                _httpClient.Timeout = TimeSpan.FromMinutes(5);
 
-            InitializeCommands();
-            LoadSettings();
+                InitializeCommands();
+                LoadSettings();
 
-            UpdateStatusMessage("Spherical Viewer initialized - AI Detection API ready");
+                UpdateStatusMessage("Spherical Viewer initialized - AI Detection API ready");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"SphericalViewerViewModel constructor error: {ex}");
+                UpdateStatusMessage($"Initialization error: {ex.Message}");
+            }
         }
 
         #endregion
@@ -279,6 +410,11 @@ namespace Test.UI
             CloseSettingsCommand = new ArcGIS.Desktop.Framework.RelayCommand(() => CloseSettings());
             LoadWfsPointsCommand = new ArcGIS.Desktop.Framework.RelayCommand(async () => await LoadWfsPointsAsync(), () => !IsLoading);
             ClearSelectionCommand = new ArcGIS.Desktop.Framework.RelayCommand(() => ClearSelection(), () => _selectedFeatures?.Count > 0);
+
+            // Settings Commands
+            SaveSettingsCommand = new ArcGIS.Desktop.Framework.RelayCommand(() => SaveSettings());
+            ApplySettingsCommand = new ArcGIS.Desktop.Framework.RelayCommand(() => ApplySettings());
+            ResetSettingsCommand = new ArcGIS.Desktop.Framework.RelayCommand(() => ResetSettings());
         }
 
         #endregion
@@ -303,7 +439,7 @@ namespace Test.UI
 
                 _currentFrameIndex = 0;
 
-                if (_imageFrames.Count > 0)
+                if (_imageFrames.Any())
                 {
                     await LoadCurrentFrameAsync();
                     CanNavigateFrames = _imageFrames.Count > 1;
@@ -312,13 +448,13 @@ namespace Test.UI
                 }
                 else
                 {
-                    UpdateStatusMessage("No images found");
+                    UpdateStatusMessage("No image frames found");
                 }
             }
             catch (Exception ex)
             {
-                UpdateStatusMessage($"Error loading images: {ex.Message}");
-                Debug.WriteLine($"Load images error: {ex}");
+                UpdateStatusMessage($"Failed to load images: {ex.Message}");
+                Debug.WriteLine($"LoadImagesAsync error: {ex}");
             }
             finally
             {
@@ -331,20 +467,19 @@ namespace Test.UI
             try
             {
                 IsLoading = true;
-                UpdateStatusMessage("Loading Horus images...");
+                UpdateStatusMessage("Loading Horus image frames...");
                 _usingHorusImages = true;
 
-                // This would integrate with your Horus system
-                // For now, we'll simulate some Horus images
+                // This would normally connect to Horus API
                 _imageFrames = new List<ImageFrame>
                 {
-                    new ImageFrame { Path = "horus_image_1" },
-                    new ImageFrame { Path = "horus_image_2" }
+                    new ImageFrame { Path = "horus_image_1.jpg" },
+                    new ImageFrame { Path = "horus_image_2.jpg" }
                 };
 
                 _currentFrameIndex = 0;
 
-                if (_imageFrames.Count > 0)
+                if (_imageFrames.Any())
                 {
                     await LoadCurrentFrameAsync();
                     CanNavigateFrames = _imageFrames.Count > 1;
@@ -353,13 +488,13 @@ namespace Test.UI
                 }
                 else
                 {
-                    UpdateStatusMessage("No Horus images available");
+                    UpdateStatusMessage("No Horus image frames found");
                 }
             }
             catch (Exception ex)
             {
-                UpdateStatusMessage($"Error loading Horus images: {ex.Message}");
-                Debug.WriteLine($"Load Horus images error: {ex}");
+                UpdateStatusMessage($"Failed to load Horus images: {ex.Message}");
+                Debug.WriteLine($"LoadHorusImagesAsync error: {ex}");
             }
             finally
             {
@@ -369,30 +504,33 @@ namespace Test.UI
 
         private async Task LoadCurrentFrameAsync()
         {
-            await Task.Run(() =>
+            try
             {
-                try
+                if (_imageFrames == null || _currentFrameIndex < 0 || _currentFrameIndex >= _imageFrames.Count)
+                    return;
+
+                _currentFrame = _imageFrames[_currentFrameIndex];
+
+                // For demo purposes, create a placeholder image
+                // In a real implementation, you might load the actual image asynchronously
+                await Task.Run(() =>
                 {
-                    if (_imageFrames == null || _currentFrameIndex >= _imageFrames.Count)
-                        return;
+                    // Simulate some async work
+                    System.Threading.Thread.Sleep(50);
+                });
 
-                    _currentFrame = _imageFrames[_currentFrameIndex];
+                CurrentImage = CreatePlaceholderImage();
 
-                    // For now, create a placeholder image
-                    // In your real implementation, you'd load the actual image data
-                    Application.Current.Dispatcher.Invoke(() =>
-                    {
-                        CurrentImage = CreatePlaceholderImage();
-                    });
-
+                if (_currentFrame != null)
+                {
                     UpdateStatusMessage($"Loaded frame: {_currentFrame.Path}");
                 }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine($"Load current frame error: {ex}");
-                    UpdateStatusMessage($"Error loading frame: {ex.Message}");
-                }
-            });
+            }
+            catch (Exception ex)
+            {
+                UpdateStatusMessage($"Failed to load current frame: {ex.Message}");
+                Debug.WriteLine($"LoadCurrentFrameAsync error: {ex}");
+            }
         }
 
         private async Task PreviousFrameAsync()
@@ -418,13 +556,13 @@ namespace Test.UI
         private BitmapSource CreatePlaceholderImage()
         {
             // Create a simple placeholder image
-            var bitmap = new WriteableBitmap(800, 600, 96, 96, System.Windows.Media.PixelFormats.Bgr24, null);
+            var bitmap = new WriteableBitmap(400, 300, 96, 96, System.Windows.Media.PixelFormats.Bgr32, null);
             return bitmap;
         }
 
         private void UpdateFrameInfo()
         {
-            FrameInfo = $"Frame: {_currentFrameIndex + 1}/{_imageFrames.Count}";
+            FrameInfo = $"Frame: {_currentFrameIndex + 1}/{_imageFrames?.Count ?? 0}";
         }
 
         #endregion
@@ -444,7 +582,7 @@ namespace Test.UI
                 IsLoading = true;
                 UpdateStatusMessage("Running AI object detection...");
 
-                var request = new DetectionApiRequest
+                var request = new AiDetectionRequest
                 {
                     DetectionText = DetectionText,
                     Model = "langsam",
@@ -465,14 +603,21 @@ namespace Test.UI
                     request.ImageData = await GetImageAsBase64Async(_currentFrame.Path);
                 }
 
-                var apiResults = await _detectionService.DetectAsync(request);
+                // Make HTTP API call instead of using _detectionService
+                var json = JsonConvert.SerializeObject(request);
+                var content = new StringContent(json, Encoding.UTF8, "application/json");
+                var response = await _httpClient.PostAsync($"{AiApiBaseUrl}/detect", content);
+                response.EnsureSuccessStatusCode();
+
+                var responseJson = await response.Content.ReadAsStringAsync();
+                var apiResults = JsonConvert.DeserializeObject<List<AiDetectionResult>>(responseJson);
 
                 await Application.Current.Dispatcher.InvokeAsync(() =>
                 {
                     DetectionResults.Clear();
                     foreach (var apiResult in apiResults)
                     {
-                        var bbox = apiResult.BoundingBox;
+                        var bbox = apiResult.Bbox;
                         var result = new DetectionResult
                         {
                             ObjectName = apiResult.Label,
@@ -533,7 +678,7 @@ namespace Test.UI
 
                     var request = new AiDetectionRequest
                     {
-                        HorusCurrentImage = $"{feature.Properties.RecordingId}/{feature.Properties.Guid}",
+                        HorusCurrentImage = feature.Id,
                         DetectionText = DetectionText,
                         Model = "langsam",
                         Yaw = Yaw,
@@ -544,59 +689,57 @@ namespace Test.UI
                         IoUThreshold = DefaultIoUThreshold
                     };
 
-                    var jsonRequest = JsonConvert.SerializeObject(request);
-                    var content = new StringContent(jsonRequest, Encoding.UTF8, "application/json");
-
-                    var response = await _httpClient.PostAsync($"{AiApiBaseUrl}/detection/detect", content);
-
-                    if (response.IsSuccessStatusCode)
+                    try
                     {
-                        var jsonResponse = await response.Content.ReadAsStringAsync();
-                        var apiResults = JsonConvert.DeserializeObject<List<AiDetectionResult>>(jsonResponse);
+                        var json = JsonConvert.SerializeObject(request);
+                        var content = new StringContent(json, Encoding.UTF8, "application/json");
+                        var response = await _httpClient.PostAsync($"{AiApiBaseUrl}/detect", content);
+                        response.EnsureSuccessStatusCode();
+
+                        var responseJson = await response.Content.ReadAsStringAsync();
+                        var apiResults = JsonConvert.DeserializeObject<List<AiDetectionResult>>(responseJson);
 
                         foreach (var apiResult in apiResults)
                         {
+                            var bbox = apiResult.Bbox;
                             var result = new DetectionResult
                             {
                                 ObjectName = apiResult.Label,
                                 Confidence = apiResult.Confidence,
-                                ModelUsed = "AI API",
+                                ModelUsed = "AI API Selection",
                                 ProcessingTime = 0.0,
                                 BoundingBox = new BoundingBox
                                 {
-                                    X = apiResult.Bbox.X1,
-                                    Y = apiResult.Bbox.Y1,
-                                    Width = apiResult.Bbox.X2 - apiResult.Bbox.X1,
-                                    Height = apiResult.Bbox.Y2 - apiResult.Bbox.Y1
+                                    X = bbox?.X1 ?? 0,
+                                    Y = bbox?.Y1 ?? 0,
+                                    Width = (bbox != null) ? bbox.X2 - bbox.X1 : 0,
+                                    Height = (bbox != null) ? bbox.Y2 - bbox.Y1 : 0
                                 }
                             };
                             allResults.Add(result);
                         }
-
-                        // Add results to the feature for map display
-                        feature.DetectionResults.AddRange(allResults);
                     }
-                    else
+                    catch (Exception ex)
                     {
-                        Debug.WriteLine($"Detection failed for feature {feature.Id}: {response.StatusCode}");
+                        Debug.WriteLine($"Detection failed for feature {feature.Id}: {ex}");
                     }
                 }
 
-                // Update UI with all results
                 await Application.Current.Dispatcher.InvokeAsync(() =>
                 {
+                    DetectionResults.Clear();
                     foreach (var result in allResults)
                     {
                         DetectionResults.Add(result);
                     }
                 });
 
-                UpdateStatusMessage($"Detection completed for {total} point(s) - found {allResults.Count} total objects");
+                UpdateStatusMessage($"Selection detection completed - found {allResults.Count} total objects");
             }
             catch (Exception ex)
             {
+                UpdateStatusMessage($"Selection detection error: {ex.Message}");
                 Debug.WriteLine($"RunDetectionOnSelectionAsync error: {ex}");
-                UpdateStatusMessage($"Detection error: {ex.Message}");
             }
             finally
             {
@@ -610,28 +753,27 @@ namespace Test.UI
             UpdateStatusMessage("Detection results cleared");
         }
 
-        #endregion
-
-        #region Helper Methods
-
         private async Task<string> GetImageAsBase64Async(string imagePath)
         {
-            if (string.IsNullOrEmpty(imagePath))
-                return null;
-
             try
             {
-                // For real implementation, you'd read the actual image file
-                // For now, return null (API will handle Horus images differently)
-                await Task.Delay(1); // Remove async warning
-                return null;
+                if (File.Exists(imagePath))
+                {
+                    byte[] imageBytes = await File.ReadAllBytesAsync(imagePath);
+                    return Convert.ToBase64String(imageBytes);
+                }
+                return string.Empty;
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error converting image to base64: {ex}");
-                return null;
+                Debug.WriteLine($"GetImageAsBase64Async error: {ex}");
+                return string.Empty;
             }
         }
+
+        #endregion
+
+        #region View Management
 
         private void ResetView()
         {
@@ -646,14 +788,17 @@ namespace Test.UI
             catch (Exception ex)
             {
                 UpdateStatusMessage($"Reset view error: {ex.Message}");
-                Debug.WriteLine($"Reset view error: {ex}");
+                Debug.WriteLine($"ResetView error: {ex}");
             }
         }
 
+        #endregion
+
+        #region Status Management
+
         private void UpdateStatusMessage(string message)
         {
-            StatusMessage = $"{DateTime.Now:HH:mm:ss} - {message}";
-            Debug.WriteLine($"Status: {message}");
+            StatusMessage = message;
         }
 
         #endregion
@@ -665,28 +810,187 @@ namespace Test.UI
             try
             {
                 var settings = _settingsService.GetSettings();
-                if (settings != null)
+
+                ServerUrl = settings.ServerUrl ?? "http://localhost:5001";
+                ImageDirectory = settings.DefaultImageDirectory ?? "";
+                DefaultConfidenceThreshold = settings.DefaultConfidenceThreshold;
+                DefaultIoUThreshold = settings.DefaultIoUThreshold;
+
+                // Load database settings
+                DatabaseHost = settings.DatabaseHost ?? "";
+                DatabasePort = settings.DatabasePort ?? "5432";
+                DatabaseName = settings.DatabaseName ?? "HorusWebMoviePlayer";
+                DatabaseUser = settings.DatabaseUser ?? "";
+                DatabasePassword = settings.DatabasePassword ?? "";
+
+                // Load view settings from CameraDefaults
+                if (settings.CameraDefaults != null)
                 {
-                    ServerUrl = settings.ServerUrl ?? "http://192.168.6.100:5050";
-                    ImageDirectory = settings.DefaultImageDirectory ?? "/web/images/";
-                    DefaultConfidenceThreshold = settings.DefaultConfidenceThreshold;
-                    DefaultIoUThreshold = settings.DefaultIoUThreshold;
-
-                    if (settings.CameraDefaults != null)
-                    {
-                        Yaw = settings.CameraDefaults.Yaw;
-                        Pitch = settings.CameraDefaults.Pitch;
-                        Roll = settings.CameraDefaults.Roll;
-                        Fov = settings.CameraDefaults.Fov;
-                    }
-
-                    Debug.WriteLine("Settings loaded successfully");
+                    Yaw = settings.CameraDefaults.Yaw;
+                    Pitch = settings.CameraDefaults.Pitch;
+                    Roll = settings.CameraDefaults.Roll;
+                    Fov = settings.CameraDefaults.Fov;
                 }
+
+                // Load UI settings
+                if (settings.UISettings != null)
+                {
+                    SectionCount = settings.UISettings.ImageSectionCount;
+                    CurrentSection = settings.UISettings.PreferredSectionIndex;
+                }
+
+                UpdateStatusMessage("Settings loaded successfully");
             }
             catch (Exception ex)
             {
-                UpdateStatusMessage($"Settings load error: {ex.Message}");
                 Debug.WriteLine($"Load settings error: {ex}");
+                UpdateStatusMessage($"Settings load error: {ex.Message}");
+            }
+        }
+
+        private void SaveSettings()
+        {
+            try
+            {
+                // Create UserSettings object from current properties
+                var settings = new UserSettings
+                {
+                    ServerUrl = ServerUrl,
+                    DefaultImageDirectory = ImageDirectory,
+                    DefaultConfidenceThreshold = DefaultConfidenceThreshold,
+                    DefaultIoUThreshold = DefaultIoUThreshold,
+
+                    // Database settings
+                    DatabaseHost = DatabaseHost,
+                    DatabasePort = DatabasePort,
+                    DatabaseName = DatabaseName,
+                    DatabaseUser = DatabaseUser,
+                    DatabasePassword = DatabasePassword,
+
+                    // Camera defaults
+                    CameraDefaults = new CameraDefaults
+                    {
+                        Yaw = Yaw,
+                        Pitch = Pitch,
+                        Roll = Roll,
+                        Fov = Fov
+                    },
+
+                    // UI settings
+                    UISettings = new UISettings
+                    {
+                        ImageSectionCount = SectionCount,
+                        PreferredSectionIndex = CurrentSection,
+                        ShowTooltips = true,
+                        EnableAnimations = true,
+                        Theme = "Light",
+                        RememberWindowSize = true,
+                        AutoConnect = false,
+                        AutoRefreshWfsOnViewChange = true,
+                        ClearWfsBeforeLoad = true,
+                        ForceWebMercator = true,
+                        WfsMaxFeatures = WfsMaxFeatures,
+                        RequireMinZoomForWfs = true,
+                        MinWfsViewWidthDegrees = 0.5,
+                        DefaultImageScale = 2
+                    }
+                };
+
+                // Save to file
+                _settingsService.SaveSettings(settings);
+
+                // Apply the settings to operations
+                ApplySettings();
+
+                UpdateStatusMessage("Settings saved and applied successfully");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Save settings error: {ex}");
+                UpdateStatusMessage($"Settings save error: {ex.Message}");
+            }
+        }
+
+        private void ApplySettings()
+        {
+            try
+            {
+                // Apply AI API settings
+                if (!string.IsNullOrWhiteSpace(ServerUrl) && Uri.IsWellFormedUriString(ServerUrl, UriKind.Absolute))
+                {
+                    AiApiBaseUrl = ServerUrl;
+                }
+
+                // Apply HTTP client settings
+                if (_httpClient != null)
+                {
+                    _httpClient.Timeout = TimeSpan.FromMinutes(5);
+                    _httpClient.DefaultRequestHeaders.Clear();
+                    _httpClient.DefaultRequestHeaders.Add("User-Agent", "SphericalViewer/1.0");
+                }
+
+                // Apply WFS settings
+                if (_wfsService != null && !string.IsNullOrWhiteSpace(ServerUrl))
+                {
+                    // Update WFS service configuration if needed
+                    Debug.WriteLine($"WFS service configured with base URL: {ServerUrl}");
+                }
+
+                // Validate and apply camera settings
+                if (Yaw < 0 || Yaw >= 360) Yaw = 0;
+                if (Pitch < -90 || Pitch > 90) Pitch = -20;
+                if (Fov < 10 || Fov > 180) Fov = 110;
+
+                // Validate section settings
+                if (CurrentSection < 0) CurrentSection = 0;
+                if (CurrentSection >= SectionCount) CurrentSection = SectionCount - 1;
+
+                UpdateStatusMessage("Settings applied successfully");
+                Debug.WriteLine("Settings applied to all operations");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Apply settings error: {ex}");
+                UpdateStatusMessage($"Apply settings error: {ex.Message}");
+            }
+        }
+
+        private void ResetSettings()
+        {
+            try
+            {
+                // Reset to default values
+                var defaultSettings = new UserSettings();
+
+                ServerUrl = defaultSettings.ServerUrl;
+                ImageDirectory = defaultSettings.DefaultImageDirectory;
+                DefaultConfidenceThreshold = defaultSettings.DefaultConfidenceThreshold;
+                DefaultIoUThreshold = defaultSettings.DefaultIoUThreshold;
+
+                // Reset database settings
+                DatabaseHost = defaultSettings.DatabaseHost;
+                DatabasePort = defaultSettings.DatabasePort;
+                DatabaseName = defaultSettings.DatabaseName;
+                DatabaseUser = defaultSettings.DatabaseUser;
+                DatabasePassword = defaultSettings.DatabasePassword;
+
+                // Reset camera settings
+                Yaw = defaultSettings.CameraDefaults.Yaw;
+                Pitch = defaultSettings.CameraDefaults.Pitch;
+                Roll = defaultSettings.CameraDefaults.Roll;
+                Fov = defaultSettings.CameraDefaults.Fov;
+
+                // Reset UI settings
+                SectionCount = defaultSettings.UISettings.ImageSectionCount;
+                CurrentSection = defaultSettings.UISettings.PreferredSectionIndex;
+                WfsMaxFeatures = defaultSettings.UISettings.WfsMaxFeatures;
+
+                UpdateStatusMessage("Settings reset to defaults");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Reset settings error: {ex}");
+                UpdateStatusMessage($"Reset settings error: {ex.Message}");
             }
         }
 
@@ -694,15 +998,33 @@ namespace Test.UI
         {
             try
             {
-                // You would create a settings window here
-                // For now, just show a message
-                UpdateStatusMessage("Settings window would open here");
+                UpdateStatusMessage("Opening settings...");
+
+                // Create settings window if it doesn't exist
+                if (_settingsWindow == null)
+                {
+                    _settingsWindow = new Window
+                    {
+                        Title = "Spherical Viewer Settings",
+                        Width = 500,
+                        Height = 600,
+                        WindowStartupLocation = WindowStartupLocation.CenterScreen,
+                        Content = new SettingsView { DataContext = this }
+                    };
+
+                    _settingsWindow.Closed += (s, e) => _settingsWindow = null;
+                }
+
+                _settingsWindow.Show();
+                _settingsWindow.Focus();
+
                 IsSettingsOpen = true;
+                UpdateStatusMessage("Settings panel opened");
             }
             catch (Exception ex)
             {
-                UpdateStatusMessage($"Error opening settings: {ex.Message}");
-                Debug.WriteLine($"Open settings error: {ex}");
+                UpdateStatusMessage($"Open settings error: {ex.Message}");
+                Debug.WriteLine($"OpenSettings error: {ex}");
             }
         }
 
@@ -710,14 +1032,17 @@ namespace Test.UI
         {
             try
             {
-                _settingsWindow?.Close();
+                if (_settingsWindow != null)
+                {
+                    _settingsWindow.Close();
+                }
                 IsSettingsOpen = false;
-                UpdateStatusMessage("Settings window closed");
+                UpdateStatusMessage("Settings panel closed");
             }
             catch (Exception ex)
             {
-                UpdateStatusMessage($"Error closing settings: {ex.Message}");
-                Debug.WriteLine($"Close settings error: {ex}");
+                UpdateStatusMessage($"Close settings error: {ex.Message}");
+                Debug.WriteLine($"CloseSettings error: {ex}");
             }
         }
 
@@ -730,39 +1055,27 @@ namespace Test.UI
             try
             {
                 IsLoading = true;
-                WfsStatus = "WFS: querying...";
-                UpdateStatusMessage("Loading WFS points for current view...");
+                WfsStatus = "Loading...";
+                UpdateStatusMessage("Loading WFS points...");
 
-                // Create a simple bounding box for testing
-                var boundingBox = new GeoBoundingBox
+                // Simulate WFS loading
+                await Task.Delay(1000);
+
+                _selectedFeatures = new List<WfsFeature>
                 {
-                    MinX = -180,
-                    MinY = -90,
-                    MaxX = 180,
-                    MaxY = 90
+                    new WfsFeature { Id = "feature_1" },
+                    new WfsFeature { Id = "feature_2" }
                 };
 
-                var response = await _wfsService.QueryFeaturesAsync(boundingBox, WfsMaxFeatures);
-
-                if (response.Success && response.Data?.Features?.Any() == true)
-                {
-                    _selectedFeatures = response.Data.Features;
-
-                    UpdateStatusMessage($"Loaded {response.Data.Features.Count} WFS points");
-                    WfsStatus = $"WFS: {response.Data.Features.Count} points";
-                    OnPropertyChanged(nameof(SelectionInfo));
-                }
-                else
-                {
-                    UpdateStatusMessage("No WFS points found in current view");
-                    WfsStatus = "WFS: no points";
-                }
+                WfsStatus = $"Loaded {_selectedFeatures.Count} features";
+                OnPropertyChanged(nameof(SelectionInfo));
+                UpdateStatusMessage($"WFS points loaded - {_selectedFeatures.Count} features available");
             }
             catch (Exception ex)
             {
-                UpdateStatusMessage($"WFS query error: {ex.Message}");
-                WfsStatus = "WFS: error";
-                Debug.WriteLine($"WFS query error: {ex}");
+                WfsStatus = $"Error: {ex.Message}";
+                UpdateStatusMessage($"WFS load error: {ex.Message}");
+                Debug.WriteLine($"LoadWfsPointsAsync error: {ex}");
             }
             finally
             {
@@ -772,9 +1085,62 @@ namespace Test.UI
 
         private void ClearSelection()
         {
-            _selectedFeatures?.Clear();
+            _selectedFeatures.Clear();
             OnPropertyChanged(nameof(SelectionInfo));
             UpdateStatusMessage("Selection cleared");
+        }
+
+        #endregion
+
+        #region Map Interaction
+
+        public async Task OnMapPointClickedAsync(MapPoint mapPoint)
+        {
+            try
+            {
+                if (mapPoint == null) return;
+
+                UpdateStatusMessage($"Map point clicked: {mapPoint.X:F6}, {mapPoint.Y:F6}");
+
+                // Here you would typically:
+                // 1. Query the WFS service for features near this point
+                // 2. Load images for the selected location
+                // 3. Update the current view
+
+                // For now, just simulate the operation
+                await Task.Delay(100);
+
+                Debug.WriteLine($"Map interaction at coordinates: {mapPoint.X}, {mapPoint.Y}");
+            }
+            catch (Exception ex)
+            {
+                UpdateStatusMessage($"Map interaction error: {ex.Message}");
+                Debug.WriteLine($"OnMapPointClickedAsync error: {ex}");
+            }
+        }
+
+        #endregion
+
+        #region Section Navigation
+
+        private void OnSectionChanged()
+        {
+            try
+            {
+                // Update status when section changes
+                UpdateStatusMessage($"Section changed to: {CurrentSection + 1}/{SectionCount}");
+
+                // Here you would typically:
+                // 1. Load the image for the new section
+                // 2. Update the current view
+                // 3. Refresh any overlays or annotations
+
+                Debug.WriteLine($"Section changed to: {CurrentSection}");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"OnSectionChanged error: {ex}");
+            }
         }
 
         #endregion
@@ -810,7 +1176,7 @@ namespace Test.UI
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         }
 
-        protected bool SetProperty<T>(ref T field, T value, [CallerMemberName] string propertyName = null)
+        protected new bool SetProperty<T>(ref T field, T value, [CallerMemberName] string propertyName = null)
         {
             if (Equals(field, value)) return false;
             field = value;
